@@ -297,6 +297,7 @@ function onMessage(m) {
     case 'init': init(m); break;
     case 'requestClose': requestClose(); break;
     case 'error': alertDialog(m.message); break;
+    case 'saved': onSaved(); break;
     case 'textureInfo': onTextureInfo(m); break;
     case 'texturePicked': {
       const cb = texPicks.get(m.id);
@@ -769,20 +770,51 @@ function updateFrameLabel() {
   $('#frameLabel').textContent = `${state.frame} / ${state.doc ? state.doc.frame.durationFrames : 0} f`;
 }
 $('#btnSave').onclick = save;
+$('#btnSaveOnly').onclick = saveOnly;
 $('#btnCancel').onclick = requestClose;
 
+// Save and close (the importer re-reads the title when the designer exits).
 function save() {
   clearTimeout(history.timer);
   post({ type: 'save', doc: state.doc });
 }
+// Save and stay (Ctrl+S). The host answers "saved".
+function saveOnly() {
+  clearTimeout(history.timer);
+  post({ type: 'saveOnly', doc: state.doc });
+}
+function onSaved() {
+  state.dirty = false;
+  const s = $('#statusRight');
+  s.textContent = '保存しました';
+  clearTimeout(onSaved.timer);
+  onSaved.timer = setTimeout(updateStatus, 2000);
+}
+
+// Window close (x) / Cancel button: with unsaved changes ask what to do.
+let closing = false;
 async function requestClose() {
-  if (state.dirty && !(await confirmDialog('保存せずに閉じますか？\n変更は失われます。', '閉じる'))) return;
-  post({ type: 'cancel' });
+  if (closing) return;
+  closing = true;
+  try {
+    if (state.dirty) {
+      const r = await choiceDialog('変更が保存されていません。', [
+        { label: '保存して閉じる', value: 'save', primary: true },
+        { label: '保存せずに閉じる', value: 'discard' },
+        { label: 'キャンセル', value: 'cancel' },
+      ]);
+      if (r === 'save') { save(); return; }
+      if (r !== 'discard') return;
+    }
+    post({ type: 'cancel' });
+  } finally {
+    closing = false;
+  }
 }
 
 document.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
-  if (e.ctrlKey && e.key.toLowerCase() === 's') { e.preventDefault(); save(); return; }
+  if (e.ctrlKey && e.key.toLowerCase() === 's') { e.preventDefault(); saveOnly(); return; }
   if (e.ctrlKey && !typing && e.key.toLowerCase() === 'z') { e.preventDefault(); undoRedo(e.shiftKey ? 1 : -1); return; }
   if (e.ctrlKey && !typing && e.key.toLowerCase() === 'y') { e.preventDefault(); undoRedo(1); return; }
   if (e.key === 'F12') { post({ type: 'devtools' }); return; }
@@ -2220,6 +2252,26 @@ function dialog(text, { input, okText, cancel = true, value = '' }) {
     $('#dialogOk').onclick = () => done(true);
     $('#dialogCancel').onclick = () => done(false);
     inp.onkeydown = (e) => { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); };
+  });
+}
+// A dialog with any number of buttons: choices = [{ label, value, primary }]. The last one is also what Escape does.
+function choiceDialog(text, choices) {
+  return new Promise((resolve) => {
+    const d = $('#dialog'), box = d.querySelector('.buttons'), original = [...box.children];
+    $('#dialogText').textContent = text;
+    $('#dialogInput').hidden = true;
+    const done = (value) => {
+      document.removeEventListener('keydown', onKey, true);
+      d.hidden = true;
+      box.replaceChildren(...original);
+      resolve(value);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); done(choices[choices.length - 1].value); } };
+    document.addEventListener('keydown', onKey, true);
+    const buttons = choices.map((c) => el('button', { class: c.primary ? 'primary' : '', text: c.label, onclick: () => done(c.value) }));
+    box.replaceChildren(...buttons);
+    d.hidden = false;
+    (buttons.find((b) => b.classList.contains('primary')) || buttons[0]).focus();
   });
 }
 const promptDialog = (text, value) => dialog(text, { input: true, value });

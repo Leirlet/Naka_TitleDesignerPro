@@ -2,7 +2,8 @@
 //
 // Launched by the importer:
 //   NAKA_TitleDesignerPro.exe --file "<.tdp>" [--bg "<bmp>"] [--new] [--owner <hwnd>] [--devtools]
-// Exit code: 0 = saved, 1 = cancelled, 2 = bad arguments / unreadable file / no WebView2.
+// Exit code: 0 = saved (also when saved with Ctrl+S and closed without further changes), 1 = cancelled,
+// 2 = bad arguments / unreadable file / no WebView2.
 //
 // The UI (ui/index.html) talks to this host with chrome.webview.postMessage (JSON).
 // Preview frames are rendered here (GPU) and handed over as WebView2 shared buffers (RGBA).
@@ -48,6 +49,7 @@ struct App {
 	ComPtr<ICoreWebView2> web;
 	int exitCode = 1;
 	bool allowClose = false;
+	bool savedAny = false;   // the file was written with Ctrl+S at least once
 };
 App g;
 
@@ -330,8 +332,18 @@ void HandleMessage(const Value& m)
 		if (!tdp::DocFromJson(m["doc"], doc)) { PostError(L"保存するデータが壊れています。"); return; }
 		if (!tdp::SaveDoc(g.file, doc)) { PostError(L"保存できませんでした。\n" + g.file); return; }
 		CloseWith(0);
+	} else if (type == "saveOnly") {
+		// Ctrl+S: write the file and stay open. Premiere re-reads the title when we exit with 0.
+		tdp::Doc doc;
+		if (!tdp::DocFromJson(m["doc"], doc)) { PostError(L"保存するデータが壊れています。"); return; }
+		if (!tdp::SaveDoc(g.file, doc)) { PostError(L"保存できませんでした。\n" + g.file); return; }
+		g.savedAny = true;
+		Value v = Value::Object();
+		v.set("type", "saved");
+		PostJson(v);
 	} else if (type == "cancel") {
-		CloseWith(1);
+		// Closing without saving now: if an earlier Ctrl+S already wrote the file, Premiere still has to reload it.
+		CloseWith(g.savedAny ? 0 : 1);
 	} else if (type == "savePresets") {
 		if (!tdp::WriteFileUtf8(PresetsPath(), m["data"].dump(true))) PostError(L"プリセットを保存できませんでした。");
 	} else if (type == "devtools") {
