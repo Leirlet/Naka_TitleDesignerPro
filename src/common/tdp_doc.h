@@ -188,6 +188,22 @@ struct AnimSpec {
 };
 
 // ---------------------------------------------------------------- text
+// Geometric figure in place of the text outline. A shape object is a text object (so the appearance stack,
+// light, warp, mask, animation and 3D all work) whose text is a single placeholder character; the figure is
+// centred on (x, y) and `width` x `height` big before the object's own scale / rotation.
+enum class ShapeType { None, Rect, Ellipse, Polygon, Star, Line, Arrow, Bubble };
+
+struct ShapeSpec {
+	ShapeType type = ShapeType::None;
+	float width = 400, height = 200;   // doc px
+	float radius = 0;                  // rect / bubble corner radius
+	int sides = 5;                     // polygon corners / star points
+	float inner = 45;                  // star: inner radius, % of the outer one
+	float shaft = 40;                  // arrow: shaft thickness, % of the height
+	float head = 35;                   // arrow: head length, % of the width
+	float tailX = -25, tailY = 70;     // bubble: tail tip from the centre, % of the width / height
+};
+
 // Warp of the whole text block, like Illustrator's envelope warps: the outlines are bent after the
 // layout, so strokes, 3D, animation and the rest work on the bent shape. amount is a signed % (-100..100).
 enum class WarpType { None, Arc, Arch, Bulge, Flag, Wave, Rise, Fisheye, Squeeze };
@@ -278,6 +294,7 @@ struct TextObject {
 	float opticalKern = 0;           // % of automatic optical spacing (evens out the visible gaps), 0 = off
 	Warp warp;
 	Mask mask;
+	ShapeSpec shape;                 // type != None: a figure instead of text
 
 	std::vector<Layer> stack;
 	Light light;

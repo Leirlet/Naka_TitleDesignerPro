@@ -21,6 +21,7 @@ const char* kLightMotions[] = { "none", "orbit", "sweep", "pass" };
 const char* kKernModes[] = { "metrics", "none", "palt" };
 const char* kWarpTypes[] = { "none", "arc", "arch", "bulge", "flag", "wave", "rise", "fisheye", "squeeze" };
 const char* kMaskTypes[] = { "none", "linear", "radial" };
+const char* kShapeTypes[] = { "none", "rect", "ellipse", "polygon", "star", "line", "arrow", "bubble" };
 const char* kTexFits[] = { "cover", "contain", "stretch", "tile" };
 const char* kTexAreas[] = { "text", "frame" };
 const char* kTexBlends[] = { "normal", "multiply", "screen", "overlay", "add", "lighten", "darken", "softLight" };
@@ -920,6 +921,20 @@ Value TextObjectToJson(const TextObject& t)
 		w.set("vertical", t.warp.vertical);
 		v.set("warp", w);
 	}
+	if (t.shape.type != ShapeType::None) {
+		Value s = Value::Object();
+		s.set("type", EnumName(t.shape.type, kShapeTypes));
+		s.set("width", t.shape.width);
+		s.set("height", t.shape.height);
+		s.set("radius", t.shape.radius);
+		s.set("sides", t.shape.sides);
+		s.set("inner", t.shape.inner);
+		s.set("shaft", t.shape.shaft);
+		s.set("head", t.shape.head);
+		s.set("tailX", t.shape.tailX);
+		s.set("tailY", t.shape.tailY);
+		v.set("shape", s);
+	}
 	if (t.mask.type != MaskType::None) {
 		Value m = Value::Object();
 		m.set("type", EnumName(t.mask.type, kMaskTypes));
@@ -1006,6 +1021,20 @@ TextObject TextObjectFromJson(const Value& v)
 		t.warp.type = EnumFrom(w["type"], kWarpTypes, WarpType::None);
 		t.warp.amount = std::clamp(F(w, "amount", t.warp.amount), -100.0f, 100.0f);
 		t.warp.vertical = w["vertical"].asBool(false);
+	}
+	if (v.has("shape")) {
+		const Value& s = v["shape"];
+		t.shape.type = EnumFrom(s["type"], kShapeTypes, ShapeType::None);
+		t.shape.width = std::max(F(s, "width", t.shape.width), 1.0f);
+		t.shape.height = std::max(F(s, "height", t.shape.height), 1.0f);
+		t.shape.radius = std::max(F(s, "radius", 0), 0.0f);
+		t.shape.sides = std::clamp(s["sides"].asInt(t.shape.sides), 3, 24);
+		t.shape.inner = std::clamp(F(s, "inner", t.shape.inner), 5.0f, 95.0f);
+		t.shape.shaft = std::clamp(F(s, "shaft", t.shape.shaft), 5.0f, 100.0f);
+		t.shape.head = std::clamp(F(s, "head", t.shape.head), 5.0f, 95.0f);
+		t.shape.tailX = F(s, "tailX", t.shape.tailX);
+		t.shape.tailY = F(s, "tailY", t.shape.tailY);
+		if (t.shape.type != ShapeType::None && t.text.empty()) t.text = L"●"; // the one unit the animation works on
 	}
 	if (v.has("mask")) {
 		const Value& m = v["mask"];

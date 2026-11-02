@@ -640,6 +640,7 @@ private:
 	// frame < 0: no animation (selection outline etc.)
 	HRESULT BuildShape(const TextObject& obj, float outScale, TextShape& shape, int frame = -1, int durationFrames = 0)
 	{
+		if (obj.shape.type != ShapeType::None) return BuildFigureShape(obj, outScale, shape, frame, durationFrames);
 		// Optical kerning: the extra spacing is worked out from the outlines, then laid out like manual kerning.
 		if (obj.opticalKern > 0 && obj.text.size() > 1) {
 			std::vector<float> opt;
@@ -748,14 +749,134 @@ private:
 		if (FAILED(hr)) return hr;
 		hr = ApplyWarp(obj, shape);
 		if (FAILED(hr)) return hr;
+		return FinishShape(obj, layout.Get(), outScale, shape, frame, durationFrames);
+	}
 
+	// ------------------------------------------------------------ geometric shapes
+	// A shape is a text object whose outline is one geometric figure instead of glyphs: it goes through the same
+	// stack, warp, mask, animation and 3D. Figure centred on the layout origin, doc px.
+	HRESULT MakeFigure(const ShapeSpec& s, ComPtr<ID2D1Geometry>& out)
+	{
+		const float w = std::max(s.width, 1.0f), h = std::max(s.height, 1.0f), hw = w * 0.5f, hh = h * 0.5f;
+		auto polygon = [&](const std::vector<D2D1_POINT_2F>& pts, ComPtr<ID2D1Geometry>& g) -> HRESULT {
+			ComPtr<ID2D1PathGeometry> path;
+			HRESULT hr = factory_->CreatePathGeometry(&path);
+			if (FAILED(hr)) return hr;
+			ComPtr<ID2D1GeometrySink> sink;
+			hr = path->Open(&sink);
+			if (FAILED(hr)) return hr;
+			sink->SetFillMode(D2D1_FILL_MODE_WINDING);
+			sink->BeginFigure(pts[0], D2D1_FIGURE_BEGIN_FILLED);
+			sink->AddLines(pts.data() + 1, (UINT32)pts.size() - 1);
+			sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+			hr = sink->Close();
+			g = path;
+			return hr;
+		};
+		switch (s.type) {
+		case ShapeType::Ellipse: {
+			ComPtr<ID2D1EllipseGeometry> g;
+			HRESULT hr = factory_->CreateEllipseGeometry(D2D1::Ellipse(D2D1::Point2F(0, 0), hw, hh), &g);
+			out = g;
+			return hr;
+		}
+		case ShapeType::Polygon:
+		case ShapeType::Star: {
+			const int n = std::clamp(s.sides, 3, 24);
+			const bool star = s.type == ShapeType::Star;
+			const float k = std::clamp(s.inner, 5.0f, 95.0f) / 100.0f;
+			std::vector<D2D1_POINT_2F> pts;
+			for (int i = 0; i < (star ? n * 2 : n); ++i) {
+				const float a = -kPi * 0.5f + kPi * 2 * i / (star ? n * 2 : n);
+				const float r = star && (i % 2) ? k : 1.0f;
+				pts.push_back(D2D1::Point2F(std::cos(a) * hw * r, std::sin(a) * hh * r));
+			}
+			return polygon(pts, out);
+		}
+		case ShapeType::Arrow: {
+			const float st = h * std::clamp(s.shaft, 5.0f, 100.0f) / 100.0f * 0.5f;
+			const float hl = std::min(w * std::clamp(s.head, 5.0f, 95.0f) / 100.0f, w);
+			return polygon({ { -hw, -st }, { hw - hl, -st }, { hw - hl, -hh }, { hw, 0 }, { hw - hl, hh }, { hw - hl, st }, { -hw, st } }, out);
+		}
+		case ShapeType::Line: {
+			ComPtr<ID2D1RoundedRectangleGeometry> g; // a bar with round ends
+			HRESULT hr = factory_->CreateRoundedRectangleGeometry(D2D1::RoundedRect(D2D1::RectF(-hw, -hh, hw, hh), hh, hh), &g);
+			out = g;
+			return hr;
+		}
+		case ShapeType::Bubble: {
+			const float r = std::clamp(s.radius, 0.0f, std::min(hw, hh));
+			ComPtr<ID2D1RoundedRectangleGeometry> body;
+			HRESULT hr = factory_->CreateRoundedRectangleGeometry(D2D1::RoundedRect(D2D1::RectF(-hw, -hh, hw, hh), r, r), &body);
+			if (FAILED(hr)) return hr;
+			// Tail: a triangle from the nearest edge to the tip (given in % of the size from the centre).
+			const float tx = s.tailX / 100.0f * w, ty = s.tailY / 100.0f * h;
+			const float bh = std::min(w, h) * 0.12f;
+			const bool vertical = std::fabs(ty) / hh >= std::fabs(tx) / hw; // leaves through the top / bottom edge
+			std::vector<D2D1_POINT_2F> tri;
+			if (vertical) {
+				const float bx = std::clamp(tx, -(hw - r - bh), hw - r - bh), ey = ty >= 0 ? hh : -hh, in = ty >= 0 ? -2.0f : 2.0f;
+				tri = { { bx - bh, ey + in }, { bx + bh, ey + in }, { tx, ty } };
+			} else {
+				const float by = std::clamp(ty, -(hh - r - bh), hh - r - bh), ex = tx >= 0 ? hw : -hw, in = tx >= 0 ? -2.0f : 2.0f;
+				tri = { { ex + in, by - bh }, { ex + in, by + bh }, { tx, ty } };
+			}
+			ComPtr<ID2D1Geometry> tail;
+			hr = polygon(tri, tail);
+			if (FAILED(hr)) return hr;
+			ComPtr<ID2D1PathGeometry> path;
+			hr = factory_->CreatePathGeometry(&path);
+			if (FAILED(hr)) return hr;
+			ComPtr<ID2D1GeometrySink> sink;
+			hr = path->Open(&sink);
+			if (FAILED(hr)) return hr;
+			hr = body->CombineWithGeometry(tail.Get(), D2D1_COMBINE_MODE_UNION, nullptr, 0.1f, sink.Get());
+			if (FAILED(hr)) return hr;
+			hr = sink->Close();
+			out = path;
+			return hr;
+		}
+		case ShapeType::Rect:
+		case ShapeType::None:
+		default: {
+			const float r = std::clamp(s.radius, 0.0f, std::min(hw, hh));
+			ComPtr<ID2D1RoundedRectangleGeometry> g;
+			HRESULT hr = factory_->CreateRoundedRectangleGeometry(D2D1::RoundedRect(D2D1::RectF(-hw, -hh, hw, hh), r, r), &g);
+			out = g;
+			return hr;
+		}
+		}
+	}
+
+	HRESULT BuildFigureShape(const TextObject& obj, float outScale, TextShape& shape, int frame, int durationFrames)
+	{
+		Run r;
+		HRESULT hr = MakeFigure(obj.shape, r.geometry);
+		if (FAILED(hr)) return hr;
+		r.placed = r.geometry;
+		r.ch = 0;
+		const float hw = std::max(obj.shape.width, 1.0f) * 0.5f, hh = std::max(obj.shape.height, 1.0f) * 0.5f;
+		r.cell = D2D1::RectF(-hw, -hh, hw, hh);
+		shape.box = r.cell;
+		shape.runs.clear();
+		shape.runs.push_back(std::move(r));
+		hr = ApplyWarp(obj, shape);
+		if (FAILED(hr)) return hr;
+		return FinishShape(obj, nullptr, outScale, shape, frame, durationFrames);
+	}
+
+	// What text and shapes share once their runs and box exist: ink, paint areas, animation, placement.
+	// layout is null for a shape.
+	HRESULT FinishShape(const TextObject& obj, IDWriteTextLayout* layout, float outScale, TextShape& shape, int frame, int durationFrames)
+	{
+		HRESULT hr = S_OK;
 		if (!shape.runs.empty()) {
 			hr = MakeUnion(shape);
 			if (FAILED(hr)) return hr;
 			shape.all->GetBounds(nullptr, &shape.ink);
-			SetPaintBoxes(obj, layout.Get(), shape);
+			SetPaintBoxes(obj, layout, shape);
 			if (frame >= 0 && HasAnimation(obj)) {
-				hr = Animate(obj, layout.Get(), frame, durationFrames, shape);
+				hr = Animate(obj, layout, frame, durationFrames, shape);
 				if (FAILED(hr)) return hr;
 			}
 		} else {
@@ -770,7 +891,10 @@ private:
 
 		const float cx = (shape.box.left + shape.box.right) * 0.5f, cy = (shape.box.top + shape.box.bottom) * 0.5f;
 		float ax, ay;
-		if (obj.vertical) {
+		if (obj.shape.type != ShapeType::None) {
+			ax = cx; // a figure is placed by its centre
+			ay = cy;
+		} else if (obj.vertical) {
 			// align runs along the column (left = top); valign picks the side (top = first column = right).
 			ay = obj.align == HAlign::Left ? shape.box.top : obj.align == HAlign::Right ? shape.box.bottom : cy;
 			ax = obj.valign == VAlign::Top ? shape.box.right : obj.valign == VAlign::Bottom ? shape.box.left : cx;
@@ -1033,6 +1157,11 @@ private:
 			obj.vertical ? 1 : 0, (int)obj.kernMode, obj.opticalKern, obj.tcyDigits, obj.rubyScale, obj.rubyGap,
 			(int)obj.warp.type, obj.warp.amount, obj.warp.vertical ? 1 : 0);
 		key += buf;
+		if (obj.shape.type != ShapeType::None) {
+			const ShapeSpec& s = obj.shape;
+			swprintf_s(buf, L"|shape%d,%g,%g,%g,%d,%g,%g,%g,%g,%g", (int)s.type, s.width, s.height, s.radius, s.sides, s.inner, s.shaft, s.head, s.tailX, s.tailY);
+			key += buf;
+		}
 		for (const Span& s : obj.spans) {
 			swprintf_s(buf, L"|s%d,%d,%g,%d,%g,%d,%g,", s.start, s.length, s.size, s.weight, s.tracking, s.tcy ? 1 : 0, s.baselineShift);
 			key += buf + s.family + L"," + s.ruby;
@@ -1268,6 +1397,8 @@ private:
 	static std::vector<int> LineOfChars(IDWriteTextLayout* layout, size_t length, int& count)
 	{
 		std::vector<int> lineOf(length + 1, 0);
+		count = 1;
+		if (!layout) return lineOf; // a shape has no lines
 		UINT32 lineCount = 0;
 		layout->GetLineMetrics(nullptr, 0, &lineCount);
 		std::vector<DWRITE_LINE_METRICS> lines(lineCount);

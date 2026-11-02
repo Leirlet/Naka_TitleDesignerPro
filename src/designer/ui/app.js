@@ -335,6 +335,7 @@ function onMessage(m) {
 }
 
 function init(m) {
+  setupShapeMenu();
   state.doc = m.doc;
   state.file = m.file;
   state.renderer = m.renderer;
@@ -629,6 +630,7 @@ function pointInQuad(q, x, y) {
 let drag = null;
 let pan = null;
 let kernDrag = null;
+let resizeDrag = null;
 function startPan(e) {
   pan = { x: e.clientX, y: e.clientY, px: state.panX, py: state.panY };
   view.setPointerCapture(e.pointerId);
@@ -672,6 +674,19 @@ view.addEventListener('pointerdown', (e) => {
     }
     state.kernSel = null;
   }
+  // A shape's corner squares resize it.
+  const rq = quads[state.sel];
+  if (state.tool === 'select' && isShape(obj()) && rq && rq.length === 8) {
+    const rv = viewRect(), px = e.offsetX * devicePixelRatio, py = e.offsetY * devicePixelRatio;
+    for (let i = 0; i < 4; i++) {
+      const [cx, cy] = toView(rv, rq[i * 2], rq[i * 2 + 1]);
+      if (Math.hypot(px - cx, py - cy) < 9 * devicePixelRatio) {
+        resizeDrag = { w0: obj().shape.width, h0: obj().shape.height };
+        view.setPointerCapture(e.pointerId);
+        return;
+      }
+    }
+  }
   let hit = -1;
   for (let i = state.doc.objects.length - 1; i >= 0; i--) {
     if (state.doc.objects[i].visible !== false && pointInQuad(quads[i], x, y)) { hit = i; break; }
@@ -690,6 +705,23 @@ view.addEventListener('pointermove', (e) => {
     state.panX = pan.px + (e.clientX - pan.x) * devicePixelRatio;
     state.panY = pan.py + (e.clientY - pan.y) * devicePixelRatio;
     draw();
+    return;
+  }
+  if (resizeDrag) {
+    const so = obj();
+    if (!so || !isShape(so)) return;
+    const [x, y] = toDoc(viewRect(), e.offsetX * devicePixelRatio, e.offsetY * devicePixelRatio);
+    const a = -so.rotation * Math.PI / 180, dx = x - so.x, dy = y - so.y;
+    const lx = (dx * Math.cos(a) - dy * Math.sin(a)) / ((so.scaleX || 100) / 100);
+    const ly = (dx * Math.sin(a) + dy * Math.cos(a)) / ((so.scaleY || 100) / 100);
+    let w = Math.max(4, Math.round(Math.abs(lx) * 2)), h = Math.max(4, Math.round(Math.abs(ly) * 2));
+    if (e.shiftKey) { // keep the proportions
+      const r = resizeDrag.w0 / resizeDrag.h0;
+      if (w / h > r) h = Math.round(w / r); else w = Math.round(h * r);
+    }
+    so.shape.width = w;
+    so.shape.height = h;
+    changed(false);
     return;
   }
   if (kernDrag) {
@@ -716,8 +748,14 @@ view.addEventListener('pointermove', (e) => {
   syncTransformInputs();
   changed(false);
 });
-view.addEventListener('pointerup', () => { drag = null; pan = null; kernDrag = null; view.classList.remove('panning'); });
-view.addEventListener('pointercancel', () => { drag = null; pan = null; kernDrag = null; view.classList.remove('panning'); });
+const endDrags = () => {
+  const resized = !!resizeDrag;
+  drag = null; pan = null; kernDrag = null; resizeDrag = null;
+  view.classList.remove('panning');
+  if (resized) buildProps(); // the width / height fields follow the new size
+};
+view.addEventListener('pointerup', endDrags);
+view.addEventListener('pointercancel', endDrags);
 view.addEventListener('dblclick', () => { if (obj()) focusText(false); });
 view.tabIndex = 0;
 
@@ -749,6 +787,19 @@ function setTool(t) {
 }
 document.querySelectorAll('.tool').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
 
+// The "add shape" menu is filled when the document arrives (SHAPE_LABELS is defined further down).
+function setupShapeMenu() {
+  const sel = $('#selAddShape');
+  if (sel.options.length > 1) return;
+  for (const [k, t] of Object.entries(SHAPE_LABELS)) sel.append(el('option', { value: k, text: t }));
+  sel.onchange = () => {
+    if (!sel.value) return;
+    state.doc.objects.push(makeShapeObject(sel.value));
+    selectObject(state.doc.objects.length - 1);
+    sel.value = '';
+    changed(true);
+  };
+}
 $('#btnAddText').onclick = () => {
   state.doc.objects.push(makeTextObject());
   selectObject(state.doc.objects.length - 1);
@@ -1265,7 +1316,9 @@ function buildProps() {
   if (!state.doc) return;
   props.append(objectsSection());
   const o = obj();
-  if (o) {
+  if (isShape(o)) {
+    props.append(shapeSection(o), transformSection(o), warpSection(o), stackSection(o), lightSection(o), animSection(o), maskSection(o));
+  } else if (o) {
     props.append(textSection(o), transformSection(o), fontSection(o), warpSection(o), rangeSection(o), stackSection(o), lightSection(o), animSection(o), maskSection(o));
   } else {
     props.append(section('ヒント', 'hint', el('div', { class: 'hint', text: 'テキストをクリックして選択します。T ツールでクリックした位置にテキストを追加できます。' })));
@@ -1279,6 +1332,51 @@ function buildProps() {
   updateStatus();
 }
 
+// ---- geometric shapes (a text object whose outline is a figure; see ShapeSpec in tdp_doc.h)
+const SHAPE_LABELS = { rect: '四角形', ellipse: '楕円', polygon: '多角形', star: '星', line: '線', arrow: '矢印', bubble: '吹き出し' };
+const isShape = (o) => !!o && !!o.shape && !!o.shape.type && o.shape.type !== 'none';
+const objLabel = (o) => (isShape(o) ? `図形：${SHAPE_LABELS[o.shape.type] || ''}` : (o.text.split('\n')[0] || o.name));
+
+function makeShapeObject(kind) {
+  const d = state.doc.frame;
+  const sizes = { rect: [Math.round(d.width * 0.3), Math.round(d.height * 0.16)], ellipse: [Math.round(d.width * 0.2), Math.round(d.height * 0.2)],
+    polygon: [220, 200], star: [240, 240], line: [Math.round(d.width * 0.3), 24], arrow: [Math.round(d.width * 0.2), 150], bubble: [Math.round(d.width * 0.3), Math.round(d.height * 0.16)] };
+  const o = makeTextObject('●', d.width / 2, d.height / 2);
+  o.name = SHAPE_LABELS[kind];
+  const fill = makeLayer('fill');
+  fill.paint = { type: 'solid', color: '#FF2D8CEB' };
+  const stroke = makeLayer('stroke');
+  stroke.width = 6;
+  stroke.paint = { type: 'solid', color: '#FFFFFFFF' };
+  o.stack = [fill, stroke, makeLayer('shadow')];
+  o.shape = { type: kind, width: sizes[kind][0], height: sizes[kind][1], radius: kind === 'rect' ? 24 : kind === 'bubble' ? 40 : 0,
+    sides: kind === 'polygon' ? 6 : 5, inner: 45, shaft: 40, head: 35, tailX: -25, tailY: 70 };
+  return o;
+}
+
+function shapeSection(o) {
+  const s = o.shape;
+  const parts = [select('図形', Object.entries(SHAPE_LABELS), () => s.type, (v) => { s.type = v; o.name = SHAPE_LABELS[v]; }, true),
+    num('幅', () => s.width, (v) => { s.width = v; }, { unit: 'px', min: 1 }),
+    num('高さ', () => s.height, (v) => { s.height = v; }, { unit: 'px', min: 1 })];
+  if (s.type === 'rect' || s.type === 'bubble') parts.push(num('角丸', () => s.radius, (v) => { s.radius = v; }, { unit: 'px', min: 0 }));
+  if (s.type === 'polygon') parts.push(num('角の数', () => s.sides, (v) => { s.sides = Math.round(v); }, { min: 3, max: 24 }));
+  if (s.type === 'star') {
+    parts.push(num('とがりの数', () => s.sides, (v) => { s.sides = Math.round(v); }, { min: 3, max: 24 }));
+    parts.push(num('くぼみの深さ', () => s.inner, (v) => { s.inner = v; }, { unit: '%（小さいほど鋭い）', min: 5, max: 95 }));
+  }
+  if (s.type === 'arrow') {
+    parts.push(num('軸の太さ', () => s.shaft, (v) => { s.shaft = v; }, { unit: '%（高さに対して）', min: 5, max: 100 }));
+    parts.push(num('矢じりの長さ', () => s.head, (v) => { s.head = v; }, { unit: '%（幅に対して）', min: 5, max: 95 }));
+  }
+  if (s.type === 'bubble') {
+    parts.push(num('しっぽ X', () => s.tailX, (v) => { s.tailX = v; }, { unit: '%（中心から。幅に対して）' }));
+    parts.push(num('しっぽ Y', () => s.tailY, (v) => { s.tailY = v; }, { unit: '%（中心から。高さに対して）' }));
+  }
+  parts.push(el('div', { class: 'hint', text: '四隅の白い四角をドラッグすると大きさを変えられます（Shift で縦横比を保つ）。塗り・フチ・影・3D・テクスチャ・ぼかしは「装飾スタック」、曲げは「ワープ」、アニメーションやマスクは文字と同じに使えます。「回転」と位置は「変形」で設定します。' }));
+  return section('図形', 'shape', ...parts);
+}
+
 function objectsSection() {
   const list = el('div', { class: 'list' });
   // Top-most object first, like a layer panel.
@@ -1287,7 +1385,7 @@ function objectsSection() {
     const eye = el('span', { class: 'eye' + (o.visible !== false ? ' on' : ''), text: o.visible !== false ? '●' : '○', title: '表示 / 非表示',
       onclick: (e) => { e.stopPropagation(); o.visible = o.visible === false; changed(true); } });
     const item = el('div', { class: 'item' + (i === state.sel ? ' selected' : ''), onclick: () => { selectObject(i); buildProps(); draw(); } },
-      eye, el('span', { class: 'name', text: o.text.split('\n')[0] || o.name }));
+      eye, el('span', { class: 'name', text: objLabel(o) }));
     list.append(item);
   }
   const up = el('button', { class: 'small', text: '前面へ', onclick: () => moveObject(1) });
@@ -1315,10 +1413,17 @@ function textSection(o) {
 function refreshObjectList() {
   const items = document.querySelectorAll('#props .section:first-child .item .name');
   const objs = [...state.doc.objects].reverse();
-  items.forEach((n, k) => { if (objs[k]) n.textContent = objs[k].text.split('\n')[0] || objs[k].name; });
+  items.forEach((n, k) => { if (objs[k]) n.textContent = objLabel(objs[k]); });
 }
 
 function transformSection(o) {
+  if (isShape(o)) {
+    return section('変形', 'transform',
+      num('X', () => o.x, (v) => { o.x = v; }, { unit: 'px', key: 'x' }),
+      num('Y', () => o.y, (v) => { o.y = v; }, { unit: 'px', key: 'y' }),
+      num('回転', () => o.rotation, (v) => { o.rotation = v; }, { unit: '°', step: 0.5 }),
+      num('不透明度', () => o.opacity, (v) => { o.opacity = v; }, { unit: '%', min: 0, max: 100 }));
+  }
   return section('変形', 'transform',
     num('X', () => o.x, (v) => { o.x = v; }, { unit: 'px', key: 'x' }),
     num('Y', () => o.y, (v) => { o.y = v; }, { unit: 'px', key: 'y' }),
