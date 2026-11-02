@@ -5,13 +5,14 @@
 // Bump SAMPLE_SEED when styles are added and give the new ones `since: <new seed>`. A presets.json
 // written by an older designer gets only the styles newer than the seed it has seen, so styles the
 // user deleted do not come back.
-const SAMPLE_SEED = 2;
+const SAMPLE_SEED = 3;
 
 const SAMPLE_FOLDERS = [
   { id: 'fv-std', name: 'バラエティ 定番' },
   { id: 'fv-pop', name: 'バラエティ ポップ' },
   { id: 'fv-impact', name: 'バラエティ 衝撃' },
   { id: 'fv-band', name: 'バラエティ 帯・座布団' },
+  { id: 'fv-glow', name: 'グロー・質感' },
 ];
 
 const SAMPLE_STYLES = (() => {
@@ -31,10 +32,16 @@ const SAMPLE_STYLES = (() => {
   const ROUND = ['Rounded Mplus 1c', 800];
   const MOCHI = ['Mochiy Pop One', 400];
   const MINCHO = ['Zen Old Mincho', 900];
-  const sample = (id, name, folder, font, stack, extra) => ({
-    id: 'fv-' + id, name, folder, since: 2,
+  const sample = (id, name, folder, font, stack, extra, since) => ({
+    id: 'fv-' + id, name, folder, since: since || 2,
     style: Object.assign({ family: font[0], weight: font[1], italic: false, tracking: 0, stack }, extra),
   });
+  // since 3: glow / texture looks (the stack has no dedicated "glow" layer: they are made from existing parts).
+  const inner = (color, blur, o) => Object.assign({ id: 'IS', type: 'innerShadow', name: '内側グロー', color, angle: 90, distance: 0, blur, spread: 0 }, base, o);
+  const soft = (id, width, color, soften, name) => Object.assign(ring(id, width, color, name || '輪郭グロー'), { soften });
+  const noise = (kind, o) => Object.assign({ path: 'builtin:' + kind, area: 'text', fit: 'tile', scale: 100, offsetX: 0, offsetY: 0, rotation: 0,
+    blend: 'overlay', opacity: 60, speed: 100, startTime: 0, loop: true }, o);
+  const GOLD_LIGHT = { angle: 225, height: 40, intensity: 110, ambient: 25, env: 'studio' };
   const WHITE = '#FFFFFFFF';
   const wide = { tracking: 2 };
 
@@ -106,5 +113,30 @@ const SAMPLE_STYLES = (() => {
     sample('band-green', '緑ラベル', 'fv-band', NOTO, [fill(solid(WHITE)), ring('S1', 4, '#FF064A1E'), band(44, 16, 24, solid('#FF12A24A')), shadow({ distance: 5, blur: 6 })]),
     sample('band-hazard', 'ドッキリ警告帯', 'fv-band', NOTO, [fill(solid(WHITE)), ring('S1', 10, '#FF000000'),
       band(44, 14, 8, { type: 'stripe', color: '#FF111111', color2: '#FFFFD400', angle: 45, size: 18, gap: 18 })]),
+
+    // ---- グロー・質感（3）
+    sample('glow-inner-blue', '内側グロー・青', 'fv-glow', NOTO, [inner('#FF5CE8FF', 16), fill(solid('#FF0A3C8C')), ring('S1', 4, '#FF40D8FF'), shadow({ distance: 4, blur: 8 })], null, 3),
+    sample('glow-inner-gold', '内側グロー・金', 'fv-glow', NOTO, [inner('#FFFFE070', 14), fill(solid('#FF8A4A00')), ...rings([4, '#FF3A1A00'], [10, WHITE]), shadow()], null, 3),
+    sample('glow-outline-cyan', '輪郭グロー・水色', 'fv-glow', ROUND, [fill(solid('#FFEAFCFF')), ring('S1', 3, '#FF18D8FF'), soft('G1', 26, '#FF18D8FF', 14)], wide, 3),
+    sample('glow-outline-pink', '輪郭グロー・ピンク', 'fv-glow', ROUND, [fill(solid('#FFFFEAF4')), ring('S1', 3, '#FFFF3C9A'), soft('G1', 26, '#FFFF3C9A', 14)], wide, 3),
+    sample('glow-outline-yellow', '輪郭グロー・黄（電球）', 'fv-glow', ROUND, [fill(solid('#FFFFFBE0')), ring('S1', 3, '#FFFFC800'), soft('G1', 30, '#FFFFB000', 18), soft('G2', 60, '#80FF8A00', 30, '外グロー')], wide, 3),
+    sample('glow-satin-navy', 'サテン風・紺', 'fv-glow', NOTO, [
+      inner('#A0FFFFFF', 8, { id: 'IS1', name: 'サテン（明）', angle: 225, distance: 9 }),
+      inner('#C0000020', 12, { id: 'IS2', name: 'サテン（暗）', angle: 45, distance: 9 }),
+      fill(lin(90, [0, '#FF3A5A9A'], [1, '#FF0E1E4A'])), ...rings([5, '#FFB8C8E8'], [10, '#FF0A1230']), shadow()], null, 3),
+    sample('tex-metal-hair', 'ヘアライン金属', 'fv-glow', NOTO, [
+      Object.assign(fill(solid('#FFFFC35A')), { material: 'lit', metallic: 100, roughness: 35, brushed: false, bevel: 'round', bevelWidth: 5, bevelHeight: 5,
+        bump: noise('fiber', { blend: 'normal' }), bumpDepth: 2 }),
+      ...rings([4, '#FF3A2400']), shadow({ distance: 6, blur: 8 })], { light: GOLD_LIGHT }, 3),
+    sample('tex-grain-gold', 'ざらつき金', 'fv-glow', NOTO, [
+      fill({ type: 'texture', tex: noise('grain', { blend: 'overlay', opacity: 80 }),
+        base: lin(90, [0, '#FFFFF6C0'], [0.45, '#FFFFD040'], [0.55, '#FFD08A00'], [1, '#FFFFE070']) }),
+      ...rings([5, '#FF4A2400'], [11, '#FF000000']), shadow({ distance: 8, blur: 6, color: '#C8000000' })], null, 3),
+    sample('tex-grunge-white', 'かすれ白文字', 'fv-glow', NOTO, [
+      fill({ type: 'texture', tex: noise('rough', { blend: 'multiply', opacity: 45 }), base: solid(WHITE) }),
+      ...rings([7, '#FF111111'], [12, WHITE]), shadow()], null, 3),
+    sample('tex-paper-cream', '紙っぽいクリーム', 'fv-glow', MINCHO, [
+      fill({ type: 'texture', tex: noise('cloud', { blend: 'multiply', opacity: 28 }), base: solid('#FFFFF2D0') }),
+      ring('S1', 6, '#FF5A3A18'), shadow({ distance: 4, blur: 6 })], { tracking: 3 }, 3),
   ];
 })();

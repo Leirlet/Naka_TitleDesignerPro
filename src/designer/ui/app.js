@@ -943,10 +943,17 @@ const texInfo = new Map();   // path -> last "textureInfo" message from the host
 const texPicks = new Map();  // request id -> callback of a file dialog
 const texPoll = new Map();   // path -> timer while a video is being converted
 
-const texLabel = (path) => (path ? path.split(/[\\/]/).pop() : '（未選択）');
+const BUILTIN_NOISE = [['grain', '粒状（細かいざらつき）'], ['rough', 'ざらつき（粗い）'], ['cloud', '雲（ムラ）'], ['fiber', '繊維（ヘアライン）']];
+const isBuiltin = (path) => !!path && path.startsWith('builtin:');
+const texLabel = (path) => {
+  if (!path) return '（未選択）';
+  if (isBuiltin(path)) return 'ノイズ：' + (BUILTIN_NOISE.find(([k]) => 'builtin:' + k === path) || [0, path])[1];
+  return path.split(/[\\/]/).pop();
+};
 
 function texStatusText(path) {
-  if (!path) return 'PNG・JPG などの画像、MOV・MP4 などの動画（透過動画も可）を選べます。';
+  if (!path) return 'PNG・JPG などの画像、MOV・MP4 などの動画（透過動画も可）、または内蔵のノイズを選べます。';
+  if (isBuiltin(path)) return '内蔵ノイズ（ファイル不要・タイルで繰り返し）';
   const i = texInfo.get(path);
   if (!i) return '確認中…';
   if (i.error) return i.error;
@@ -987,6 +994,16 @@ function textureEditor(tex, opt = {}) {
   box.append(row('ファイル', el('span', { class: 'texName', text: texLabel(path), title: path }),
     el('button', { class: 'small', text: path ? '変更…' : '選ぶ…', onclick: () => pickTexture((p) => { tex.path = p; requestTexInfo(p, true); changed(true); }) }),
     path ? el('button', { class: 'small', text: '外す', onclick: () => { tex.path = ''; changed(true); } }) : null));
+  // Built-in noise (grain, roughness, ...): picking one also sets what usually suits it (tiled, overlaid).
+  const noiseSel = el('select', { onchange: () => {
+    if (!noiseSel.value) return;
+    tex.path = 'builtin:' + noiseSel.value;
+    tex.fit = 'tile';
+    tex.scale = 100;
+    if (opt.blend) { tex.blend = 'overlay'; tex.opacity = 60; }
+    changed(true);
+  } }, el('option', { value: '', text: '内蔵ノイズを使う…' }), BUILTIN_NOISE.map(([k, t]) => el('option', { value: k, text: t })));
+  box.append(row('ノイズ', noiseSel));
   box.append(el('div', { class: 'hint texStatus', 'data-path': path, text: texStatusText(path) }));
   if (!path) return box;
   box.append(seg('貼る範囲', [['text', 'テキスト（一緒に動く）'], ['frame', '画面全体']], () => tex.area, (v) => { tex.area = v; }));
@@ -1588,6 +1605,9 @@ function moveLayer(o, i, d) {
   changed(true);
 }
 
+// Blur of the finished layer: a blurred stroke is an outline glow, a blurred white fill an inner glow.
+const softenRow = (l) => num('ぼかし', () => l.soften || 0, (v) => { l.soften = v; }, { unit: 'px（0 = なし。ぼかしたフチ＝輪郭グロー）', min: 0, step: 0.5 });
+
 function layerEditor(o, l) {
   const nameInput = el('input', { type: 'text', value: l.name });
   nameInput.addEventListener('change', () => { l.name = nameInput.value || LAYER_LABELS[l.type]; changed(true); });
@@ -1601,6 +1621,7 @@ function layerEditor(o, l) {
       break;
     case 'fill':
       parts.push(paintEditor(l.paint));
+      parts.push(softenRow(l));
       parts.push(surfaceEditor(o, l));
       break;
     case 'stroke':
@@ -1609,6 +1630,7 @@ function layerEditor(o, l) {
       parts.push(seg('角', [['round', 'ラウンド'], ['miter', 'マイター'], ['bevel', 'ベベル']], () => l.join, (v) => { l.join = v; }));
       parts.push(num('マイター上限', () => l.miterLimit, (v) => { l.miterLimit = v; }, { min: 1, step: 0.5 }));
       parts.push(paintEditor(l.paint));
+      parts.push(softenRow(l));
       parts.push(surfaceEditor(o, l));
       break;
     case 'shadow':
@@ -1629,6 +1651,7 @@ function layerEditor(o, l) {
       parts.push(num('余白（上下）', () => l.padY, (v) => { l.padY = v; }, { unit: 'px' }));
       parts.push(num('角丸', () => l.radius, (v) => { l.radius = v; }, { unit: 'px', min: 0 }));
       parts.push(paintEditor(l.paint));
+      parts.push(softenRow(l));
       break;
     case 'extrude':
       parts.push(el('div', { class: 'animTitle', text: '押し出し' }));

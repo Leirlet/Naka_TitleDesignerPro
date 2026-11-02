@@ -6,6 +6,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cwctype>
 #include <list>
@@ -42,6 +43,67 @@ std::wstring Lower(std::wstring s)
 {
 	for (auto& c : s) c = (wchar_t)std::towlower(c);
 	return s;
+}
+
+// ---- built-in noise textures: "builtin:grain" / "rough" / "cloud" / "fiber". 1024 x 1024, grey, opaque,
+// average about 0.5 so that overlay / soft light leave the mean alone, and tileable.
+constexpr int kNoiseSize = 1024;
+
+bool IsBuiltin(const std::wstring& p) { return p.rfind(L"builtin:", 0) == 0; }
+
+uint32_t Hash2(int x, int y, uint32_t seed)
+{
+	uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u + seed * 2246822519u;
+	h = (h ^ (h >> 13)) * 1274126177u;
+	return h ^ (h >> 16);
+}
+float Rnd(int x, int y, uint32_t seed) { return (Hash2(x, y, seed) & 0xFFFFFF) / 16777215.0f; }
+float Smooth(float t) { return t * t * (3 - 2 * t); }
+
+// Value noise on a lattice of cx x cy cells that wraps around the unit square.
+float VNoise(float u, float v, int cx, int cy, uint32_t seed)
+{
+	const float x = u * cx, y = v * cy;
+	const int x0 = (int)std::floor(x), y0 = (int)std::floor(y);
+	const float fx = Smooth(x - x0), fy = Smooth(y - y0);
+	auto at = [&](int i, int j) { return Rnd(((i % cx) + cx) % cx, ((j % cy) + cy) % cy, seed); };
+	const float a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1);
+	const float top = a + (b - a) * fx, bottom = c + (d - c) * fx;
+	return top + (bottom - top) * fy;
+}
+
+float Fractal(float u, float v, int cx, int cy, int octaves, float gain, uint32_t seed)
+{
+	float sum = 0, amp = 1, norm = 0;
+	for (int o = 0; o < octaves; ++o) {
+		sum += amp * VNoise(u, v, cx << o, cy << o, seed + (uint32_t)o * 17u);
+		norm += amp;
+		amp *= gain;
+	}
+	return sum / norm;
+}
+
+std::shared_ptr<Frame> MakeNoise(const std::wstring& path)
+{
+	const std::wstring kind = path.substr(8);
+	auto out = std::make_shared<Frame>();
+	out->w = out->h = kNoiseSize;
+	out->bgra.resize((size_t)kNoiseSize * kNoiseSize * 4);
+	for (int y = 0; y < kNoiseSize; ++y)
+		for (int x = 0; x < kNoiseSize; ++x) {
+			const float u = (x + 0.5f) / kNoiseSize, v = (y + 0.5f) / kNoiseSize;
+			const float grain = (Rnd(x, y, 1) + Rnd(x, y, 2)) * 0.5f; // triangular: fewer extremes than flat noise
+			float n, contrast;
+			if (kind == L"rough") { n = 0.85f * Fractal(u, v, 8, 8, 5, 0.55f, 11) + 0.15f * grain; contrast = 2.4f; }
+			else if (kind == L"cloud") { n = Fractal(u, v, 3, 3, 4, 0.5f, 23); contrast = 2.2f; }
+			else if (kind == L"fiber") { n = 0.9f * Fractal(u, v, 2, 256, 3, 0.6f, 31) + 0.1f * grain; contrast = 2.0f; } // streaks along x
+			else { n = grain; contrast = 1.8f; }
+			const float g = std::clamp(0.5f + (n - 0.5f) * contrast, 0.0f, 1.0f);
+			uint8_t* p = &out->bgra[((size_t)y * kNoiseSize + x) * 4];
+			p[0] = p[1] = p[2] = (uint8_t)(g * 255.0f + 0.5f);
+			p[3] = 255;
+		}
+	return out;
 }
 
 bool IsStill(const std::wstring& path)
@@ -305,6 +367,13 @@ Info Convert(const std::wstring& path, const std::wstring& dir, const std::funct
 bool Examine(const std::wstring& path, Entry& entry)
 {
 	Info& info = entry.info;
+	if (IsBuiltin(path)) { // generated, no file
+		entry.key = path;
+		info.id = path;
+		info.ok = true;
+		info.w = info.h = kNoiseSize;
+		return true;
+	}
 	ULONGLONG size = 0, mtime = 0;
 	if (path.empty() || !Stamp(path, size, mtime)) {
 		info.error = path.empty() ? L"ファイルが選ばれていません" : L"ファイルが見つかりません";
@@ -450,7 +519,7 @@ std::shared_ptr<const Frame> GetFrame(const std::wstring& path, int index)
 				return g_frames.front().frame;
 			}
 	}
-	std::shared_ptr<Frame> frame = DecodeImage(file);
+	std::shared_ptr<Frame> frame = IsBuiltin(path) ? MakeNoise(path) : DecodeImage(file);
 	if (!frame) return nullptr;
 	std::lock_guard<std::mutex> lock(g_mutex);
 	g_frames.push_front({ key, frame });

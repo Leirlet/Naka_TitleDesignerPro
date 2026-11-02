@@ -662,6 +662,8 @@ Value LayerToJson(const Layer& l)
 	v.set("name", l.name);
 	v.set("enabled", l.enabled);
 	v.set("opacity", l.opacity);
+	if (l.soften > 0 && (l.type == LayerType::Fill || l.type == LayerType::Stroke || l.type == LayerType::Background))
+		v.set("soften", l.soften);
 	if ((l.type == LayerType::Fill || l.type == LayerType::Stroke) && HasSurface(l)) {
 		v.set("material", EnumName(l.material, kMaterials));
 		v.set("metallic", l.metallic);
@@ -742,6 +744,7 @@ Layer LayerFromJson(const Value& v)
 	l.enabled = v["enabled"].asBool(true);
 	l.opacity = F(v, "opacity", 100);
 	if (v.has("paint")) l.paint = PaintFromJson(v["paint"]);
+	l.soften = std::max(F(v, "soften", 0), 0.0f);
 	l.width = F(v, "width", l.width);
 	l.position = EnumFrom(v["position"], kStrokePositions, l.position);
 	l.join = EnumFrom(v["join"], kJoins, l.join);

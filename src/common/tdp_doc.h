@@ -75,6 +75,7 @@ struct Layer {
 	float opacity = 100;           // %
 
 	Paint paint;                   // fill / stroke / background / long shadow
+	float soften = 0;              // fill / stroke / background: blur of the finished layer (px). A blurred stroke is an outline glow
 
 	// stroke
 	float width = 8;

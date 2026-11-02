@@ -1565,6 +1565,23 @@ private:
 
 	static D2D1_POINT_2F Origin() { return D2D1::Point2F(0, 0); }
 
+	// Gaussian blur of a whole slot in place (stdDev in output px). Uses kA as scratch.
+	HRESULT BlurSlot(int slot, float stdDev)
+	{
+		if (stdDev < 0.05f) return S_OK;
+		ComPtr<ID2D1Effect> blur;
+		HRESULT hr = dc_->CreateEffect(CLSID_D2D1GaussianBlur, &blur);
+		if (FAILED(hr)) return hr;
+		blur->SetInput(0, Slot(slot));
+		blur->SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, stdDev);
+		blur->SetValue(D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, D2D1_BORDER_MODE_SOFT);
+		Target(kA, true);
+		dc_->DrawImage(blur.Get());
+		Target(slot, true);
+		dc_->DrawImage(Slot(kA));
+		return S_OK;
+	}
+
 	// ------------------------------------------------------------ textures
 	struct TexSlot {
 		std::wstring key;
@@ -2122,6 +2139,7 @@ private:
 				f.metallic = defaults.metallic; f.roughness = defaults.roughness; f.brushed = false;
 				f.bump = Texture();
 				f.tex = Texture();
+				f.soften = 0;
 			}
 			k.light = Light();
 			x.sideColor = defaults.sideColor; x.sideColor2 = defaults.sideColor2;
@@ -2341,6 +2359,10 @@ private:
 			if (FAILED(hr)) return hr;
 			if (HasSurface(l)) {
 				hr = ApplySurface(obj, l, shape);
+				if (FAILED(hr)) return hr;
+			}
+			if (l.soften > 0 && (l.type == LayerType::Fill || l.type == LayerType::Stroke || l.type == LayerType::Background)) {
+				hr = BlurSlot(kTmp, l.soften * shape.deviceScale * 0.5f);
 				if (FAILED(hr)) return hr;
 			}
 			// Each further layer goes behind everything drawn so far.
