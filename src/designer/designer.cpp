@@ -65,11 +65,42 @@ std::wstring KnownFolder(REFKNOWNFOLDERID id)
 	return s;
 }
 
-std::wstring PresetsPath()
+std::wstring SettingsDir()
 {
 	std::wstring dir = KnownFolder(FOLDERID_RoamingAppData) + L"\\NAKA\\TitleDesignerPro";
 	SHCreateDirectoryExW(nullptr, dir.c_str(), nullptr);
-	return dir + L"\\presets.json";
+	return dir;
+}
+
+std::wstring PresetsPath() { return SettingsDir() + L"\\presets.json"; }
+std::wstring WindowStatePath() { return SettingsDir() + L"\\window.txt"; }
+
+// Window size / position / maximized state of the last session: "left top right bottom maximized".
+struct SavedWindow { RECT rc{}; bool maximized = false; bool valid = false; };
+
+SavedWindow LoadWindowState()
+{
+	SavedWindow w;
+	std::string text;
+	long l, t, r, b;
+	int m = 0;
+	if (tdp::ReadFileUtf8(WindowStatePath(), text) && sscanf_s(text.c_str(), "%ld %ld %ld %ld %d", &l, &t, &r, &b, &m) == 5) {
+		w.rc = { l, t, r, b };
+		w.maximized = m != 0;
+		// Only trust it if the window would still be on a connected monitor.
+		w.valid = r - l > 200 && b - t > 200 && MonitorFromRect(&w.rc, MONITOR_DEFAULTTONULL) != nullptr;
+	}
+	return w;
+}
+
+void SaveWindowState(HWND hwnd)
+{
+	WINDOWPLACEMENT wp{ sizeof(wp) };
+	if (!GetWindowPlacement(hwnd, &wp)) return;
+	const RECT& r = wp.rcNormalPosition;
+	char buf[128];
+	sprintf_s(buf, "%ld %ld %ld %ld %d", r.left, r.top, r.right, r.bottom, wp.showCmd == SW_SHOWMAXIMIZED ? 1 : 0);
+	tdp::WriteFileUtf8(WindowStatePath(), buf);
 }
 
 void PostJson(const Value& v)
@@ -324,7 +355,8 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		return 0;
 	case WM_GETMINMAXINFO: {
 		const float s = GetDpiForWindow(hwnd) / 96.0f;
-		reinterpret_cast<MINMAXINFO*>(lp)->ptMinTrackSize = { (LONG)(1100 * s), (LONG)(700 * s) };
+		// Small enough for a narrow window next to vertical video; the panels shrink with it.
+		reinterpret_cast<MINMAXINFO*>(lp)->ptMinTrackSize = { (LONG)(640 * s), (LONG)(480 * s) };
 		return 0;
 	}
 	case WM_CLOSE:
@@ -338,6 +370,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		DestroyWindow(hwnd);
 		return 0;
 	case WM_DESTROY:
+		SaveWindowState(hwnd);
 		if (g.controller) g.controller->Close();
 		PostQuitMessage(g.exitCode);
 		return 0;
@@ -406,7 +439,15 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int)
 	std::wstring title = L"NAKA Title Designer Pro - " + name;
 	HWND wnd = CreateWindowExW(0, L"TdpDesigner", title.c_str(), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
 		x, y, ww, wh, nullptr, nullptr, inst, nullptr);
-	ShowWindow(wnd, SW_SHOW);
+	const SavedWindow saved = LoadWindowState();
+	if (saved.valid) {
+		WINDOWPLACEMENT wp{ sizeof(wp) };
+		wp.showCmd = saved.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+		wp.rcNormalPosition = saved.rc;
+		SetWindowPlacement(wnd, &wp);
+	} else {
+		ShowWindow(wnd, SW_SHOW);
+	}
 	SetForegroundWindow(wnd);
 
 	MSG msg;

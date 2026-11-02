@@ -47,19 +47,34 @@
       <div id="stage">
         <canvas id="view"></canvas>
       </div>
-      <div id="status"><span id="statusLeft"></span><span id="statusRight" class="dim"></span></div>
+      <div id="status">
+        <span id="statusLeft"></span>
+        <span class="grow"></span>
+        <span id="statusRight" class="dim"></span>
+        <span id="zoomBar">
+          <button id="btnZoomOut" class="small" title="縮小 (Ctrl+-)">−</button>
+          <button id="zoomLabel" class="small mono" title="100% に戻す (Ctrl+1)">100%</button>
+          <button id="btnZoomIn" class="small" title="拡大 (Ctrl++)">＋</button>
+          <button id="btnFit" class="small" title="全体表示 (Ctrl+0)">全体表示</button>
+        </span>
+      </div>
     </section>
 
+    <div id="splitV" class="splitter v" title="ドラッグでパネルの幅を変更（ダブルクリックで元に戻す）"></div>
     <aside id="props"></aside>
   </div>
+
+  <div id="splitH" class="splitter h" title="ドラッグでスタイル欄の高さを変更（ダブルクリックで元に戻す）"></div>
 
   <footer id="styles">
     <div class="tabs">
       <button class="tab active" data-tab="style">スタイル</button>
       <button class="tab" data-tab="title">テロップ全体</button>
       <span class="grow"></span>
+      <label class="toggle" id="keepFontBox" title="スタイルを適用するとき、選択中のテキストのフォント（書体・太さ・斜体・字間）はそのままにして、色・フチ・影などだけ変える"><input type="checkbox" id="chkKeepFont"> フォントを維持して適用</label>
       <button id="btnSavePreset">現在の設定を保存</button>
     </div>
+    <div id="folderBar"></div>
     <div id="presetList"></div>
   </footer>
 </div>
@@ -75,6 +90,7 @@
   </div>
 </div>
 
+<script src="samples.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

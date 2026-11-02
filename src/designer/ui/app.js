@@ -165,6 +165,9 @@ const state = {
   lastMs: 0,
   presets: null,
   presetTab: 'style',
+  folderSel: { style: '*', title: '*' }, // '*' = all, '' = not in a folder, else a folder id
+  zoom: 1,          // preview zoom relative to "fit to window"
+  panX: 0, panY: 0, // preview offset from centred, device px
   dirty: false,
   textSel: [0, 0], // last selection in the text box
 };
@@ -277,7 +280,7 @@ function init(m) {
   state.file = m.file;
   state.renderer = m.renderer;
   state.fonts = m.fonts || [];
-  state.presets = m.presets && m.presets.styles ? m.presets : defaultPresets();
+  state.presets = loadPresets(m.presets);
   state.sel = state.doc.objects.length ? 0 : -1;
   if (obj()) state.layerSel = obj().stack[0] && obj().stack[0].id;
   if (m.bgUrl) {
@@ -304,25 +307,96 @@ const view = $('#view');
 const ctx = view.getContext('2d');
 let checker = null;
 
-function viewRect() {
-  const W = view.width, H = view.height, m = 24 * devicePixelRatio;
-  if (!state.doc) return { x: 0, y: 0, w: W, h: H, s: 1 };
+const ZOOM_MIN = 0.1, ZOOM_MAX = 16;
+
+// Where the frame sits on the canvas (device px). s = canvas px per doc px.
+function viewRect(zoom = state.zoom) {
+  const W = view.width, H = view.height, m = 12 * devicePixelRatio;
+  if (!state.doc) return { x: 0, y: 0, w: W, h: H, s: 1, fit: 1 };
   const f = state.doc.frame;
-  const s = Math.max(0.01, Math.min((W - 2 * m) / f.width, (H - 2 * m) / f.height));
+  const fit = Math.max(0.01, Math.min((W - 2 * m) / f.width, (H - 2 * m) / f.height));
+  const s = fit * zoom;
   const w = f.width * s, h = f.height * s;
-  return { x: (W - w) / 2, y: (H - h) / 2, w, h, s };
+  return { x: (W - w) / 2 + state.panX, y: (H - h) / 2 + state.panY, w, h, s, fit };
 }
 const toView = (v, x, y) => [v.x + x * v.s, v.y + y * v.s];
 const toDoc = (v, x, y) => [(x - v.x) / v.s, (y - v.y) / v.s];
+
+// Zoom by `factor` keeping the doc point under (px, py) (device px) where it is.
+function zoomAt(px, py, factor) {
+  const v = viewRect();
+  const z = clamp(state.zoom * factor, ZOOM_MIN, ZOOM_MAX);
+  if (z === state.zoom) return;
+  const [dx, dy] = toDoc(v, px, py);
+  const v2 = viewRect(z);
+  state.zoom = z;
+  state.panX += px - (v2.x + dx * v2.s);
+  state.panY += py - (v2.y + dy * v2.s);
+  viewChanged();
+}
+function stepZoom(factor) { zoomAt(view.width / 2, view.height / 2, factor); }
+function fitView() { state.zoom = 1; state.panX = state.panY = 0; viewChanged(); }
+function actualSize() {
+  const v = viewRect(1);
+  state.zoom = clamp(devicePixelRatio / v.fit, ZOOM_MIN, ZOOM_MAX);
+  state.panX = state.panY = 0;
+  viewChanged();
+}
+let viewTimer = 0;
+function viewChanged() {
+  draw();
+  updateZoomLabel();
+  // The preview is rendered at the on-screen size (up to the frame size): refresh it once zooming settles.
+  clearTimeout(viewTimer);
+  viewTimer = setTimeout(requestRender, 120);
+}
+function updateZoomLabel() {
+  if (!state.doc) return;
+  $('#zoomLabel').textContent = Math.round(viewRect().s / devicePixelRatio * 100) + '%';
+}
 
 function resize() {
   const r = $('#stage').getBoundingClientRect();
   view.width = Math.max(1, Math.round(r.width * devicePixelRatio));
   view.height = Math.max(1, Math.round(r.height * devicePixelRatio));
   draw();
+  updateZoomLabel();
   requestRender();
 }
 new ResizeObserver(resize).observe($('#stage'));
+
+// ------------------------------------------------------------------ panel layout
+// The right panel and the style list are resized by dragging their splitters; sizes are remembered.
+const LAYOUT_DEFAULT = { propsW: 360, stylesH: 150 };
+const layout = (() => {
+  try { return Object.assign({}, LAYOUT_DEFAULT, JSON.parse(localStorage.getItem('layout') || '{}')); } catch { return Object.assign({}, LAYOUT_DEFAULT); }
+})();
+// The stage always keeps some room, so a small window shrinks the panels instead of hiding them.
+const clampPropsW = (w) => clamp(w, 220, Math.max(220, innerWidth - 44 - 5 - 120));
+const clampStylesH = (h) => clamp(h, 70, Math.max(70, Math.round(innerHeight * 0.55)));
+function applyLayout() {
+  const root = document.documentElement.style;
+  root.setProperty('--propsW', clampPropsW(layout.propsW) + 'px');
+  root.setProperty('--stylesH', clampStylesH(layout.stylesH) + 'px');
+}
+function saveLayout() { try { localStorage.setItem('layout', JSON.stringify(layout)); } catch { /* ignore */ } }
+function splitter(sel, prop, valueAt, clampFn) {
+  const s = $(sel);
+  s.addEventListener('pointerdown', (e) => { s.setPointerCapture(e.pointerId); s.classList.add('active'); e.preventDefault(); });
+  s.addEventListener('pointermove', (e) => {
+    if (!s.classList.contains('active')) return;
+    layout[prop] = clampFn(valueAt(e));
+    applyLayout();
+  });
+  const end = () => { if (s.classList.contains('active')) { s.classList.remove('active'); saveLayout(); } };
+  s.addEventListener('pointerup', end);
+  s.addEventListener('pointercancel', end);
+  s.addEventListener('dblclick', () => { layout[prop] = LAYOUT_DEFAULT[prop]; applyLayout(); saveLayout(); });
+}
+splitter('#splitV', 'propsW', (e) => innerWidth - e.clientX - 2, clampPropsW);
+splitter('#splitH', 'stylesH', (e) => innerHeight - e.clientY - 2, clampStylesH);
+window.addEventListener('resize', applyLayout);
+applyLayout();
 
 function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -401,9 +475,26 @@ function pointInQuad(q, x, y) {
 }
 
 let drag = null;
+let pan = null;
+function startPan(e) {
+  pan = { x: e.clientX, y: e.clientY, px: state.panX, py: state.panY };
+  view.setPointerCapture(e.pointerId);
+  view.classList.add('panning');
+}
+// Mouse wheel zooms around the pointer (Ctrl is not needed; trackpad pinch arrives as Ctrl + wheel).
+view.addEventListener('wheel', (e) => {
+  if (!state.doc) return;
+  e.preventDefault();
+  const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
+  zoomAt(e.offsetX * devicePixelRatio, e.offsetY * devicePixelRatio, Math.exp(-e.deltaY * unit * 0.0015));
+}, { passive: false });
+view.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); }); // no middle-click autoscroll
 view.addEventListener('pointerdown', (e) => {
   if (!state.doc) return;
   view.focus();
+  // Middle button or Alt + drag moves the view.
+  if (e.button === 1 || (e.button === 0 && e.altKey)) { e.preventDefault(); startPan(e); return; }
+  if (e.button !== 0) return;
   const v = viewRect();
   const [x, y] = toDoc(v, e.offsetX * devicePixelRatio, e.offsetY * devicePixelRatio);
   if (state.tool === 'text') {
@@ -424,9 +515,17 @@ view.addEventListener('pointerdown', (e) => {
   if (o && hit >= 0) {
     drag = { x, y, ox: o.x, oy: o.y, moved: false };
     view.setPointerCapture(e.pointerId);
+  } else if (hit < 0 && (state.zoom !== 1 || state.panX || state.panY)) {
+    startPan(e); // dragging empty space moves a zoomed view
   }
 });
 view.addEventListener('pointermove', (e) => {
+  if (pan) {
+    state.panX = pan.px + (e.clientX - pan.x) * devicePixelRatio;
+    state.panY = pan.py + (e.clientY - pan.y) * devicePixelRatio;
+    draw();
+    return;
+  }
   if (!drag) return;
   const v = viewRect();
   const [x, y] = toDoc(v, e.offsetX * devicePixelRatio, e.offsetY * devicePixelRatio);
@@ -439,7 +538,8 @@ view.addEventListener('pointermove', (e) => {
   syncTransformInputs();
   changed(false);
 });
-view.addEventListener('pointerup', () => { drag = null; });
+view.addEventListener('pointerup', () => { drag = null; pan = null; view.classList.remove('panning'); });
+view.addEventListener('pointercancel', () => { drag = null; pan = null; view.classList.remove('panning'); });
 view.addEventListener('dblclick', () => { if (obj()) focusText(false); });
 view.tabIndex = 0;
 
@@ -503,7 +603,11 @@ document.querySelectorAll('[data-align]').forEach((b) => b.addEventListener('cli
 }));
 $('#chkBg').onchange = (e) => { state.showBg = e.target.checked; draw(); };
 $('#chkSafe').onchange = (e) => { state.showSafe = e.target.checked; draw(); };
-$('#frameSlider').oninput = (e) => { stopPlay(); state.frame = Number(e.target.value); updateFrameLabel(); requestRender(); };
+$('#btnFit').onclick = fitView;
+$('#zoomLabel').onclick = actualSize;
+$('#btnZoomIn').onclick = () => stepZoom(1.25);
+$('#btnZoomOut').onclick = () => stepZoom(1 / 1.25);
+$('#frameSlider').oninput =(e) => { stopPlay(); state.frame = Number(e.target.value); updateFrameLabel(); requestRender(); };
 function updateFrameLabel() {
   $('#frameLabel').textContent = `${state.frame} / ${state.doc ? state.doc.frame.durationFrames : 0} f`;
 }
@@ -525,6 +629,10 @@ document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && !typing && e.key.toLowerCase() === 'z') { e.preventDefault(); undoRedo(e.shiftKey ? 1 : -1); return; }
   if (e.ctrlKey && !typing && e.key.toLowerCase() === 'y') { e.preventDefault(); undoRedo(1); return; }
   if (e.key === 'F12') { post({ type: 'devtools' }); return; }
+  if (e.ctrlKey && e.key === '0') { e.preventDefault(); fitView(); return; }
+  if (e.ctrlKey && e.key === '1') { e.preventDefault(); actualSize(); return; }
+  if (e.ctrlKey && (e.key === '+' || e.key === '=')) { e.preventDefault(); stepZoom(1.25); return; }
+  if (e.ctrlKey && (e.key === '-' || e.key === '_')) { e.preventDefault(); stepZoom(1 / 1.25); return; }
   if (typing) return;
   if (e.ctrlKey && e.key.toLowerCase() === 'd') { e.preventDefault(); $('#btnDupObj').click(); return; }
   if (e.key === ' ') { e.preventDefault(); togglePlay(); return; }
@@ -1393,6 +1501,7 @@ function defaultPresets() {
   const style = (id, name, stack, extra) => ({ id, name, style: Object.assign({ family: 'Yu Gothic UI', weight: 800, italic: false, tracking: 0, stack }, extra) });
   return {
     version: 1,
+    seed: 1,
     styles: [
       style('d1', '白文字・黒フチ', [fill(solid('#FFFFFFFF')), stroke('S1', 8, solid('#FF000000')), shadow()]),
       style('d2', '黄文字・赤フチ・白フチ', [fill(solid('#FFFFE600')), stroke('S1', 7, solid('#FFE0141E')), stroke('S2', 16, solid('#FFFFFFFF'), '外フチ'), shadow({ distance: 8 })]),
@@ -1413,12 +1522,32 @@ function defaultPresets() {
   };
 }
 
+// Presets as stored in presets.json, plus the factory samples this designer has not merged yet.
+// folders: { style: [{ id, name }], title: [...] }. An item with no `folder` is not in a folder.
+function loadPresets(saved) {
+  const p = saved && saved.styles ? saved : defaultPresets();
+  if (!Array.isArray(p.titles)) p.titles = [];
+  p.folders = Object.assign({ style: [], title: [] }, p.folders);
+  const seen = p.seed || 1;
+  if (seen < SAMPLE_SEED) {
+    for (const f of SAMPLE_FOLDERS) if (!p.folders.style.some((x) => x.id === f.id)) p.folders.style.push({ id: f.id, name: f.name });
+    for (const s of SAMPLE_STYLES) {
+      if (s.since > seen && !p.styles.some((x) => x.id === s.id)) p.styles.push({ id: s.id, name: s.name, folder: s.folder, style: clone(s.style) });
+    }
+    p.seed = SAMPLE_SEED;
+    setTimeout(savePresets, 0); // state.presets is set by the caller by then
+  }
+  return p;
+}
+
 const thumbCache = new Map();
 
 function thumbDocForStyle(p) {
   const st = p.style;
+  // A cushion layer widens the telop: use a smaller sample text so it fits the thumbnail.
+  const wide = st.stack.some((l) => l.type === 'background');
   return { format: 'NAKA-TDP', version: 2, frame: { width: 560, height: 240, vidScale: 30, vidSampleSize: 1, durationFrames: 1 },
-    objects: [{ type: 'text', id: 'thumb', text: 'あア亜Ab', x: 280, y: 120, align: 'center', valign: 'middle', size: 104,
+    objects: [{ type: 'text', id: 'thumb', text: 'あア亜Ab', x: 280, y: 120, align: 'center', valign: 'middle', size: wide ? 72 : 104,
       family: st.family, weight: st.weight, italic: st.italic, tracking: st.tracking || 0, spans: [], kerning: [], stack: st.stack }] };
 }
 function thumbDocForTitle(p) {
@@ -1426,7 +1555,8 @@ function thumbDocForTitle(p) {
   const objects = p.objects.map((o) => Object.assign({}, o, { animIn: { type: 'none' }, animOut: { type: 'none' } }));
   return { format: 'NAKA-TDP', version: 2, frame: { width: p.width, height: p.height, vidScale: 30, vidSampleSize: 1, durationFrames: 1 }, objects };
 }
-const presetKey = (p) => p.id + ':' + JSON.stringify(p).length;
+// Only what is drawn counts, so renaming or moving a preset keeps its thumbnail.
+const presetKey = (p) => p.id + ':' + JSON.stringify(p.style || p.objects).length;
 
 function queueThumb(p) {
   const key = presetKey(p);
@@ -1450,37 +1580,187 @@ function drawThumb(key) {
   });
 }
 
+// ---- folders
+const presetItems = () => (state.presetTab === 'style' ? state.presets.styles : state.presets.titles);
+const presetFolders = () => state.presets.folders[state.presetTab];
+const folderName = (id) => { const f = presetFolders().find((x) => x.id === id); return f ? f.name : ''; };
+let dragPreset = null;
+
+function selectFolder(id) {
+  state.folderSel[state.presetTab] = id;
+  buildPresets();
+}
+
+function moveToFolder(p, id) {
+  if (id) p.folder = id; else delete p.folder;
+  savePresets();
+  buildPresets();
+}
+
+async function newFolder(thenMove) {
+  const name = await promptDialog('フォルダ名', '');
+  if (!name) return null;
+  const f = { id: newId('D'), name };
+  presetFolders().push(f);
+  if (thenMove) thenMove.folder = f.id;
+  state.folderSel[state.presetTab] = f.id;
+  savePresets();
+  buildPresets();
+  return f;
+}
+
+async function renameFolder(f) {
+  const name = await promptDialog('フォルダ名', f.name);
+  if (!name) return;
+  f.name = name;
+  savePresets();
+  buildPresets();
+}
+
+async function deleteFolder(f) {
+  const items = presetItems().filter((p) => p.folder === f.id);
+  const note = items.length ? `\n中の ${items.length} 件は「未分類」に戻ります（削除されません）。` : '';
+  if (!(await confirmDialog(`フォルダ「${f.name}」を削除しますか？${note}`, '削除'))) return;
+  for (const p of items) delete p.folder;
+  const list = presetFolders();
+  list.splice(list.indexOf(f), 1);
+  if (state.folderSel[state.presetTab] === f.id) state.folderSel[state.presetTab] = '*';
+  savePresets();
+  buildPresets();
+}
+
+function buildFolderBar() {
+  const bar = $('#folderBar');
+  bar.replaceChildren();
+  const items = presetItems(), folders = presetFolders();
+  let sel = state.folderSel[state.presetTab];
+  if (sel && !folders.some((f) => f.id === sel)) sel = state.folderSel[state.presetTab] = '*';
+  const chip = (id, label, count, opt = {}) => {
+    const b = el('button', { class: 'chip' + (sel === id ? ' on' : ''), title: opt.title || '', onclick: () => selectFolder(id) },
+      label, el('span', { class: 'count', text: String(count) }));
+    if (opt.menu) b.addEventListener('contextmenu', (e) => { e.preventDefault(); popupMenu(e.clientX, e.clientY, opt.menu); });
+    if (opt.drop) {
+      b.addEventListener('dragover', (e) => { if (dragPreset) { e.preventDefault(); b.classList.add('dropTarget'); } });
+      b.addEventListener('dragleave', () => b.classList.remove('dropTarget'));
+      b.addEventListener('drop', (e) => {
+        e.preventDefault();
+        b.classList.remove('dropTarget');
+        if (dragPreset) moveToFolder(dragPreset, id);
+        dragPreset = null;
+      });
+    }
+    return b;
+  };
+  bar.append(chip('*', 'すべて', items.length, { title: 'すべてのフォルダの中身を表示' }));
+  if (folders.length) {
+    bar.append(chip('', '未分類', items.filter((p) => !p.folder).length, { drop: true, title: 'フォルダに入れていないもの。スタイルをドラッグして戻せます' }));
+  }
+  for (const f of folders) {
+    bar.append(chip(f.id, f.name, items.filter((p) => p.folder === f.id).length, {
+      drop: true,
+      title: 'スタイルをドラッグして入れられます。右クリックで名前変更・削除',
+      menu: [{ label: '名前を変更…', run: () => renameFolder(f) }, { label: 'フォルダを削除…', run: () => deleteFolder(f) }],
+    }));
+  }
+  bar.append(el('button', { class: 'chip add', text: '＋ フォルダ', title: '新しいフォルダを作る', onclick: () => newFolder(null) }));
+}
+
+// ---- context menu
+let menuEl = null;
+function closeMenu() { if (menuEl) { menuEl.remove(); menuEl = null; } }
+function popupMenu(x, y, entries) {
+  closeMenu();
+  const m = el('div', { class: 'menu' }, entries.map((it) => {
+    if (it.sep) return el('div', { class: 'sep' });
+    if (it.head) return el('div', { class: 'mh', text: it.head });
+    return el('div', { class: 'mi' + (it.cur ? ' cur' : ''), text: it.label, onclick: () => { closeMenu(); it.run(); } });
+  }));
+  document.body.append(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(2, Math.min(x, innerWidth - r.width - 4)) + 'px';
+  m.style.top = Math.max(2, Math.min(y, innerHeight - r.height - 4)) + 'px';
+  menuEl = m;
+}
+document.addEventListener('pointerdown', (e) => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+window.addEventListener('blur', closeMenu);
+
+function presetMenu(p, x, y) {
+  const moves = [{ head: 'フォルダへ移動' }, { label: '未分類', cur: !p.folder, run: () => moveToFolder(p, '') }];
+  for (const f of presetFolders()) moves.push({ label: f.name, cur: p.folder === f.id, run: () => moveToFolder(p, f.id) });
+  moves.push({ label: '新しいフォルダへ…', run: () => newFolder(p) });
+  popupMenu(x, y, [
+    { label: '名前を変更…', run: async () => {
+      const name = await promptDialog('名前', p.name);
+      if (!name) return;
+      p.name = name;
+      savePresets();
+      buildPresets();
+    } },
+    { sep: true }, ...moves, { sep: true },
+    { label: '削除…', run: () => deletePreset(p) },
+  ]);
+}
+
+async function deletePreset(p) {
+  if (!(await confirmDialog(`「${p.name}」を削除しますか？`, '削除'))) return;
+  const items = presetItems();
+  items.splice(items.indexOf(p), 1);
+  savePresets();
+  buildPresets();
+}
+
 function buildPresets() {
   const list = $('#presetList');
   list.replaceChildren();
   if (!state.presets) return;
-  const items = state.presetTab === 'style' ? state.presets.styles : state.presets.titles;
+  buildFolderBar();
+  $('#keepFontBox').hidden = state.presetTab !== 'style';
+  const sel = state.folderSel[state.presetTab];
+  const items = presetItems().filter((p) => sel === '*' || (sel === '' ? !p.folder : p.folder === sel));
   if (!items.length) {
-    list.append(el('div', { class: 'hint', style: 'padding:8px', text: state.presetTab === 'style'
-      ? '保存したスタイルがありません。'
-      : '「現在の設定を保存」で、今のテロップ全体（全オブジェクト）をテンプレートとして保存できます。' }));
+    list.append(el('div', { class: 'hint', style: 'padding:8px', text: presetItems().length
+      ? 'このフォルダは空です。スタイルをここへドラッグするか、右クリックの「フォルダへ移動」で入れられます。'
+      : state.presetTab === 'style'
+        ? '保存したスタイルがありません。'
+        : '「現在の設定を保存」で、今のテロップ全体（全オブジェクト）をテンプレートとして保存できます。' }));
   }
   for (const p of items) {
     const key = presetKey(p);
     const c = el('canvas', { width: 336, height: 144, 'data-key': key });
-    const del = el('button', { class: 'del small', text: '×', title: '削除', onclick: async (e) => {
+    const del = el('button', { class: 'del small', text: '×', title: '削除', onclick: (e) => { e.stopPropagation(); deletePreset(p); } });
+    const more = el('button', { class: 'more small', text: '⋯', title: 'メニュー（名前変更・フォルダへ移動）', onclick: (e) => {
       e.stopPropagation();
-      if (!(await confirmDialog(`「${p.name}」を削除しますか？`, '削除'))) return;
-      items.splice(items.indexOf(p), 1);
-      savePresets();
-      buildPresets();
+      const r = e.currentTarget.getBoundingClientRect();
+      presetMenu(p, r.left, r.bottom);
     } });
-    list.append(el('div', { class: 'preset', title: p.name, onclick: () => applyPreset(p) }, c, el('div', { class: 'label', text: p.name }), del));
+    const label = p.name + (sel === '*' && p.folder && folderName(p.folder) ? `　[${folderName(p.folder)}]` : '');
+    const card = el('div', { class: 'preset', draggable: 'true', title: p.name, onclick: () => applyPreset(p) },
+      c, el('div', { class: 'label', text: label }), del, more);
+    card.addEventListener('contextmenu', (e) => { e.preventDefault(); presetMenu(p, e.clientX, e.clientY); });
+    card.addEventListener('dragstart', (e) => {
+      dragPreset = p;
+      e.dataTransfer.setData('text/plain', p.name);
+      e.dataTransfer.effectAllowed = 'move';
+      card.classList.add('dragging');
+    });
+    card.addEventListener('dragend', () => { dragPreset = null; card.classList.remove('dragging'); });
+    list.append(card);
     if (thumbCache.has(key)) drawThumb(key); else queueThumb(p);
   }
 }
+
+// Keep the text's font settings (typeface, weight, italic, tracking) when applying a style.
+const keepFont = $('#chkKeepFont');
+try { keepFont.checked = localStorage.getItem('keepFont') === '1'; } catch { /* ignore */ }
+keepFont.onchange = () => { try { localStorage.setItem('keepFont', keepFont.checked ? '1' : '0'); } catch { /* ignore */ } };
 
 async function applyPreset(p) {
   if (p.style) {
     const o = obj();
     if (!o) { alertDialog('スタイルを適用するテキストを選択してください。'); return; }
     const st = clone(p.style);
-    o.family = st.family; o.weight = st.weight; o.italic = !!st.italic; o.tracking = st.tracking || 0;
+    if (!keepFont.checked) { o.family = st.family; o.weight = st.weight; o.italic = !!st.italic; o.tracking = st.tracking || 0; }
     o.stack = st.stack;
     state.layerSel = o.stack[0] ? o.stack[0].id : null;
     changed(true);
@@ -1498,17 +1778,24 @@ async function applyPreset(p) {
 }
 
 $('#btnSavePreset').onclick = async () => {
+  // A new preset goes into the folder being shown (not for "all" / "not in a folder").
+  const sel = state.folderSel[state.presetTab];
+  const folder = sel && sel !== '*' ? sel : undefined;
+  let p;
   if (state.presetTab === 'style') {
     const o = obj();
     if (!o) { alertDialog('保存するテキストを選択してください。'); return; }
     const name = await promptDialog('スタイル名', o.text.split('\n')[0].slice(0, 16));
     if (!name) return;
-    state.presets.styles.push({ id: newId('S'), name, style: { family: o.family, weight: o.weight, italic: o.italic, tracking: o.tracking, stack: clone(o.stack) } });
+    p = { id: newId('S'), name, style: { family: o.family, weight: o.weight, italic: o.italic, tracking: o.tracking, stack: clone(o.stack) } };
+    state.presets.styles.push(p);
   } else {
     const name = await promptDialog('テンプレート名', obj() ? obj().text.split('\n')[0].slice(0, 16) : 'テロップ');
     if (!name) return;
-    state.presets.titles.push({ id: newId('P'), name, width: state.doc.frame.width, height: state.doc.frame.height, objects: clone(state.doc.objects) });
+    p = { id: newId('P'), name, width: state.doc.frame.width, height: state.doc.frame.height, objects: clone(state.doc.objects) };
+    state.presets.titles.push(p);
   }
+  if (folder) p.folder = folder;
   savePresets();
   buildPresets();
 };
