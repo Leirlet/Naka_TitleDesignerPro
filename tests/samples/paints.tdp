@@ -1,0 +1,34 @@
+{
+  "format": "NAKA-TDP",
+  "version": 2,
+  "frame": { "width": 1920, "height": 1080, "vidScale": 30000, "vidSampleSize": 1001, "durationFrames": 150 },
+  "objects": [
+    {
+      "type": "text", "id": "T1", "name": "グラデ + ストライプ縁 + 内側シャドウ",
+      "text": "グラデ×ストライプ", "x": 960, "y": 330, "align": "center", "valign": "middle",
+      "family": "Yu Gothic UI", "size": 170, "weight": 900,
+      "stack": [
+        { "id": "IS", "type": "innerShadow", "color": "#B4602000", "angle": 90, "distance": 6, "blur": 8 },
+        { "id": "F", "type": "fill", "paint": { "type": "linear", "angle": 90, "stops": [
+          { "pos": 0, "color": "#FFFFF8A0" }, { "pos": 0.5, "color": "#FFFFC000" }, { "pos": 1, "color": "#FFFF6A00" } ] } },
+        { "id": "S1", "type": "stroke", "width": 14, "position": "outer", "join": "round",
+          "paint": { "type": "stripe", "color": "#FF101060", "color2": "#FF3050D0", "angle": 45, "size": 6, "gap": 6 } },
+        { "id": "S2", "type": "stroke", "width": 24, "position": "outer", "join": "round", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+        { "id": "SH", "type": "shadow", "color": "#96000000", "angle": 90, "distance": 10, "blur": 16, "spread": 4 }
+      ]
+    },
+    {
+      "type": "text", "id": "T2", "name": "ドット背景 + 角の処理",
+      "text": "MITER 結合 / ドット座布団", "x": 960, "y": 800, "align": "center", "valign": "middle",
+      "family": "Yu Gothic UI", "size": 96, "weight": 700, "rotation": -4,
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FF202020" } },
+        { "id": "S1", "type": "stroke", "width": 10, "position": "outer", "join": "miter", "miterLimit": 10, "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+        { "id": "BG", "type": "background", "padX": 40, "padY": 24, "radius": 28,
+          "paint": { "type": "dots", "color": "#FFFF5A9A", "color2": "#FFFFD6E6", "angle": 30, "size": 14, "gap": 26 } },
+        { "id": "BG2", "type": "background", "padX": 52, "padY": 36, "radius": 40, "paint": { "type": "radial", "stops": [
+          { "pos": 0, "color": "#FF8040FF" }, { "pos": 1, "color": "#FF2A0A60" } ] } }
+      ]
+    }
+  ]
+}

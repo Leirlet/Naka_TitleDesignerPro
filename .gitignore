@@ -1,0 +1,13 @@
+# Build output
+/build/
+/out/
+.vs/
+*.user
+
+# Third-party packages are fetched locally (see README)
+/third_party/
+
+# Scratch output of the check tools
+*.bmp
+tools/dev/_f*.bmp
+__pycache__/

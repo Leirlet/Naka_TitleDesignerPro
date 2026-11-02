@@ -1,0 +1,29 @@
+{
+  "format": "NAKA-TDP",
+  "version": 2,
+  "frame": { "width": 1920, "height": 1080, "vidScale": 30, "vidSampleSize": 1, "durationFrames": 60 },
+  "objects": [
+    {
+      "type": "text", "id": "T1", "name": "ポップ", "text": "今夜は激辛祭り！",
+      "x": 960, "y": 360, "align": "center", "valign": "middle", "family": "Yu Gothic UI", "size": 140, "weight": 900,
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "linear", "angle": 90, "stops": [ { "pos": 0, "color": "#FFFFF6C0" }, { "pos": 1, "color": "#FFFF8A00" } ] } },
+        { "id": "S1", "type": "stroke", "width": 8, "position": "outer", "join": "round", "paint": { "type": "solid", "color": "#FFB00000" } },
+        { "id": "S2", "type": "stroke", "width": 18, "position": "outer", "join": "round", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+        { "id": "SH", "type": "shadow", "color": "#B4000000", "angle": 90, "distance": 8, "blur": 8 }
+      ],
+      "animIn": { "type": "pop", "unit": "char", "order": "forward", "duration": 10, "stagger": 3 },
+      "animOut": { "type": "drop", "unit": "char", "order": "backward", "duration": 10, "stagger": 2 }
+    },
+    {
+      "type": "text", "id": "T2", "name": "座布団", "text": "タイプライターで出る",
+      "x": 960, "y": 760, "align": "center", "valign": "middle", "family": "Yu Gothic UI", "size": 90, "weight": 700,
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+        { "id": "BG", "type": "background", "padX": 30, "padY": 12, "radius": 10, "paint": { "type": "solid", "color": "#C8000000" } }
+      ],
+      "animIn": { "type": "typewriter", "unit": "char", "stagger": 2 },
+      "animOut": { "type": "slide", "unit": "all", "dir": "right", "duration": 12, "amount": 400 }
+    }
+  ]
+}

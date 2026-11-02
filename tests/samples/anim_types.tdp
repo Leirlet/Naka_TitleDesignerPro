@@ -1,0 +1,24 @@
+{
+  "format": "NAKA-TDP",
+  "version": 2,
+  "frame": { "width": 1920, "height": 1080, "vidScale": 30, "vidSampleSize": 1, "durationFrames": 60 },
+  "objects": [
+    { "type": "text", "id": "A", "text": "ズーム中央から", "x": 960, "y": 150, "size": 100, "weight": 900,
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+                 { "id": "S", "type": "stroke", "width": 10, "paint": { "type": "solid", "color": "#FF0050C0" } } ],
+      "animIn": { "type": "zoom", "unit": "char", "order": "centerOut", "duration": 12, "stagger": 3 } },
+    { "type": "text", "id": "B", "text": "飛び出しランダム", "x": 960, "y": 400, "size": 100, "weight": 900,
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFE600" } },
+                 { "id": "S", "type": "stroke", "width": 10, "paint": { "type": "solid", "color": "#FF000000" } } ],
+      "animIn": { "type": "rise", "unit": "char", "order": "random", "duration": 12, "stagger": 2 } },
+    { "type": "text", "id": "C", "text": "回転して登場", "x": 960, "y": 650, "size": 100, "weight": 900,
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFF6FA8" } },
+                 { "id": "S", "type": "stroke", "width": 10, "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+                 { "id": "SH", "type": "shadow", "color": "#B4000000", "angle": 90, "distance": 6, "blur": 6 } ],
+      "animIn": { "type": "spin", "unit": "char", "order": "forward", "duration": 14, "stagger": 3 } },
+    { "type": "text", "id": "D", "text": "1行目はスライド\n2行目もスライド", "x": 960, "y": 900, "size": 70, "weight": 700,
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+                 { "id": "S", "type": "stroke", "width": 8, "paint": { "type": "solid", "color": "#FF206020" } } ],
+      "animIn": { "type": "slide", "unit": "line", "dir": "left", "duration": 14, "stagger": 6, "amount": 300 } }
+  ]
+}

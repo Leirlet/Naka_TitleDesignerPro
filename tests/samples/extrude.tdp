@@ -1,0 +1,37 @@
+{
+  "format": "NAKA-TDP",
+  "version": 2,
+  "frame": { "width": 1920, "height": 1080, "vidScale": 30, "vidSampleSize": 1, "durationFrames": 60 },
+  "objects": [
+    {
+      "type": "text", "id": "T1", "name": "金属", "text": "GOLD 金色",
+      "x": 960, "y": 230, "align": "center", "valign": "middle", "family": "Yu Gothic UI", "size": 170, "weight": 900,
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "linear", "angle": 90, "stops": [ { "pos": 0, "color": "#FFFFF0B0" }, { "pos": 1, "color": "#FFC08A20" } ] } },
+        { "id": "X", "type": "extrude", "depth": 40, "sideColor": "#FFD8A030", "sideColor2": "#FF6A4410", "bevel": "round", "bevelWidth": 5, "bevelHeight": 5,
+          "rotX": 12, "rotY": -28, "perspective": 50, "lightAngle": 225, "lightHeight": 40, "lightIntensity": 100, "ambient": 30, "metallic": 90, "roughness": 30 },
+        { "id": "SH", "type": "shadow", "color": "#B4000000", "angle": 90, "distance": 10, "blur": 14 }
+      ]
+    },
+    {
+      "type": "text", "id": "T2", "name": "フチ＋平ら", "text": "激辛祭り！",
+      "x": 960, "y": 560, "align": "center", "valign": "middle", "family": "Yu Gothic UI", "size": 150, "weight": 900,
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+        { "id": "S1", "type": "stroke", "width": 10, "position": "outer", "join": "round", "paint": { "type": "solid", "color": "#FFE01010" } },
+        { "id": "X", "type": "extrude", "depth": 60, "sideColor": "#FFB00000", "sideColor2": "#FF400000", "bevel": "flat", "bevelWidth": 4, "bevelHeight": 4,
+          "rotX": -20, "rotY": 0, "perspective": 80, "lightAngle": 270, "lightHeight": 50, "lightIntensity": 100, "ambient": 35, "metallic": 0, "roughness": 45 }
+      ]
+    },
+    {
+      "type": "text", "id": "T3", "name": "3D回転", "text": "くるっと回る",
+      "x": 960, "y": 870, "align": "center", "valign": "middle", "family": "Yu Gothic UI", "size": 130, "weight": 700,
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FF40C8FF" } },
+        { "id": "X", "type": "extrude", "depth": 30, "sideColor": "#FF2080C0", "sideColor2": "#FF103050", "bevel": "cove", "bevelWidth": 4, "bevelHeight": 4,
+          "rotX": 0, "rotY": 0, "perspective": 50, "lightAngle": 225, "lightHeight": 45, "lightIntensity": 100, "ambient": 35, "metallic": 0, "roughness": 40 }
+      ],
+      "animIn": { "type": "flip3d", "unit": "char", "order": "forward", "dir": "left", "duration": 16, "stagger": 3, "amount": 180, "fade": false }
+    }
+  ]
+}

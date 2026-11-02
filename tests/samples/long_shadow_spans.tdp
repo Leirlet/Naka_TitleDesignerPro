@@ -1,0 +1,35 @@
+{
+  "format": "NAKA-TDP",
+  "version": 2,
+  "frame": { "width": 1920, "height": 1080, "vidScale": 30000, "vidSampleSize": 1001, "durationFrames": 150 },
+  "objects": [
+    {
+      "type": "text", "id": "T1", "name": "文字ごと + ロングシャドウ",
+      "text": "今夜は激辛祭り！", "x": 960, "y": 520, "align": "center", "valign": "middle",
+      "family": "Yu Gothic UI", "size": 150, "weight": 900, "tracking": 4,
+      "spans": [
+        { "start": 3, "length": 2, "size": 210, "baselineShift": -10, "paints": {
+          "F": { "type": "linear", "angle": 90, "stops": [ { "pos": 0, "color": "#FFFFE080" }, { "pos": 1, "color": "#FFFF2000" } ] },
+          "S1": { "type": "solid", "color": "#FF400000" } } },
+        { "start": 7, "length": 1, "family": "Meiryo", "tracking": 0, "paints": { "F": { "type": "solid", "color": "#FFFFE000" } } }
+      ],
+      "kerning": [ { "index": 0, "value": -20 }, { "index": 5, "value": 30 } ],
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+        { "id": "S1", "type": "stroke", "width": 9, "position": "outer", "join": "round", "paint": { "type": "solid", "color": "#FF1A1A1A" } },
+        { "id": "LS", "type": "longShadow", "angle": 45, "length": 40, "paint": { "type": "solid", "color": "#FF7A1010" } },
+        { "id": "S2", "type": "stroke", "width": 4, "position": "outer", "join": "round", "paint": { "type": "solid", "color": "#FF1A1A1A" } }
+      ]
+    },
+    {
+      "type": "text", "id": "T2", "name": "内フチ",
+      "text": "内フチ・左揃え", "x": 120, "y": 900, "align": "left", "valign": "bottom",
+      "family": "Yu Gothic UI", "size": 110, "weight": 900, "scaleX": 120,
+      "stack": [
+        { "id": "S1", "type": "stroke", "width": 6, "position": "inner", "join": "round", "paint": { "type": "solid", "color": "#FF00A0FF" } },
+        { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+        { "id": "S2", "type": "stroke", "width": 6, "position": "center", "join": "bevel", "paint": { "type": "solid", "color": "#FF003060" } }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "format": "NAKA-TDP",
+  "version": 2,
+  "frame": { "width": 1920, "height": 1080, "vidScale": 30, "vidSampleSize": 1, "durationFrames": 30 },
+  "objects": [
+    { "type": "text", "id": "A", "text": "1行目のテロップ\n2行目も同じ色", "x": 520, "y": 300, "family": "Yu Gothic UI", "size": 90, "weight": 900,
+      "spans": [ { "start": 0, "length": 2, "ruby": "いちぎょうめ" } ],
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "linear", "angle": 90, "stops": [ { "pos": 0, "color": "#FFFFF080" }, { "pos": 1, "color": "#FFFF6000" } ] } },
+                 { "id": "S", "type": "stroke", "width": 8, "paint": { "type": "linear", "angle": 90, "stops": [ { "pos": 0, "color": "#FF4040FF" }, { "pos": 1, "color": "#FF000040" } ] } } ] },
+    { "type": "text", "id": "B", "text": "1行目のテロップ\n2行目も同じ色", "paintPerLine": false, "x": 1400, "y": 300, "family": "Yu Gothic UI", "size": 90, "weight": 900,
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "linear", "angle": 90, "stops": [ { "pos": 0, "color": "#FFFFF080" }, { "pos": 1, "color": "#FFFF6000" } ] } },
+                 { "id": "S", "type": "stroke", "width": 8, "paint": { "type": "linear", "angle": 90, "stops": [ { "pos": 0, "color": "#FF4040FF" }, { "pos": 1, "color": "#FF000040" } ] } } ] },
+    { "type": "text", "id": "V", "text": "縦書きの\nグラデ", "vertical": true, "x": 960, "y": 780, "family": "Yu Gothic UI", "size": 90, "weight": 900,
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "linear", "angle": 90, "stops": [ { "pos": 0, "color": "#FFFFFFFF" }, { "pos": 1, "color": "#FF00C0FF" } ] } },
+                 { "id": "S", "type": "stroke", "width": 8, "paint": { "type": "solid", "color": "#FF002040" } } ] }
+  ]
+}

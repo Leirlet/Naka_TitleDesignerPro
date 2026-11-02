@@ -1,0 +1,11 @@
+// PiPL converted by CnvtPiPL (custom build step in CMakeLists.txt)
+#include "TdpImporterPiPL.rcp"
+
+// FourCC filetype 'NTDP'
+#define NTDP 0x4E544450L
+
+1000 IMPT DISCARDABLE
+BEGIN
+	0x0000
+	NTDP
+END

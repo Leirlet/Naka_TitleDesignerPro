@@ -1,0 +1,18 @@
+{
+  "format": "NAKA-TDP",
+  "version": 2,
+  "frame": { "width": 1920, "height": 1080, "vidScale": 30000, "vidSampleSize": 1001, "durationFrames": 150 },
+  "objects": [
+    {
+      "type": "text", "id": "T1", "name": "縁→縁→シャドウ",
+      "text": "縁→縁→シャドウ", "x": 960, "y": 540, "align": "center", "valign": "middle",
+      "family": "Yu Gothic UI", "size": 160, "weight": 800,
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+        { "id": "S1", "type": "stroke", "width": 8, "position": "outer", "join": "round", "paint": { "type": "solid", "color": "#FFE0201A" } },
+        { "id": "S2", "type": "stroke", "width": 22, "position": "outer", "join": "round", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+        { "id": "SH", "type": "shadow", "color": "#C8000000", "angle": 45, "distance": 18, "blur": 10, "spread": 0 }
+      ]
+    }
+  ]
+}

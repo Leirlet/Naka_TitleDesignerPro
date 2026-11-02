@@ -1,0 +1,24 @@
+{
+  "format": "NAKA-TDP",
+  "version": 2,
+  "frame": { "width": 1920, "height": 1080, "vidScale": 30, "vidSampleSize": 1, "durationFrames": 30 },
+  "objects": [
+    { "type": "text", "id": "H", "text": "今日は東京で薔薇を見る", "x": 960, "y": 200, "family": "Yu Gothic UI", "size": 100, "weight": 900,
+      "spans": [ { "start": 0, "length": 2, "ruby": "きょう" },
+                 { "start": 3, "length": 2, "ruby": "とうきょう", "paints": { "F": { "type": "solid", "color": "#FFFFE000" } } },
+                 { "start": 6, "length": 1, "ruby": "ば" }, { "start": 7, "length": 1, "ruby": "ら" } ],
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+                 { "id": "S", "type": "stroke", "width": 10, "paint": { "type": "solid", "color": "#FF102080" } } ] },
+    { "type": "text", "id": "H2", "text": "二行目の漢字\n本気と書いてマジ", "x": 960, "y": 560, "family": "Yu Mincho", "size": 90, "weight": 700,
+      "rubyScale": 40, "rubyGap": 6,
+      "spans": [ { "start": 3, "length": 1, "ruby": "の" }, { "start": 4, "length": 2, "ruby": "かんじ" }, { "start": 7, "length": 2, "ruby": "マジ" } ],
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+                 { "id": "SH", "type": "shadow", "color": "#C0000000", "angle": 90, "distance": 6, "blur": 6 } ] },
+    { "type": "text", "id": "V", "text": "東京都\n渋谷区", "vertical": true, "x": 1700, "y": 600, "family": "Yu Gothic UI", "size": 100, "weight": 700,
+      "spans": [ { "start": 0, "length": 3, "ruby": "とうきょうと" }, { "start": 4, "length": 2, "ruby": "しぶや" } ],
+      "animIn": { "type": "pop", "unit": "char", "duration": 10, "stagger": 3 },
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+                 { "id": "S", "type": "stroke", "width": 8, "paint": { "type": "solid", "color": "#FF000000" } },
+                 { "id": "BG", "type": "background", "padX": 20, "padY": 20, "radius": 8, "paint": { "type": "solid", "color": "#A0002060" } } ] }
+  ]
+}

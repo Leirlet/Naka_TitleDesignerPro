@@ -1,0 +1,21 @@
+{
+  "format": "NAKA-TDP",
+  "version": 2,
+  "frame": { "width": 1920, "height": 1080, "vidScale": 30, "vidSampleSize": 1, "durationFrames": 30 },
+  "objects": [
+    { "type": "text", "id": "V1", "text": "縦書きテロップ！\nＡＢＣとabc、ー〜。", "vertical": true,
+      "x": 1500, "y": 540, "align": "center", "valign": "middle", "family": "Yu Gothic UI", "size": 100, "weight": 900,
+      "spans": [ { "start": 2, "length": 3, "size": 130, "paints": { "F": { "type": "solid", "color": "#FFFFE600" } } } ],
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "linear", "angle": 90, "stops": [ { "pos": 0, "color": "#FFFFFFFF" }, { "pos": 1, "color": "#FFFFB0D0" } ] } },
+                 { "id": "S", "type": "stroke", "width": 9, "paint": { "type": "solid", "color": "#FFC00040" } },
+                 { "id": "S2", "type": "stroke", "width": 18, "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+                 { "id": "SH", "type": "shadow", "color": "#B4000000", "angle": 90, "distance": 8, "blur": 8 } ] },
+    { "type": "text", "id": "V2", "text": "上揃え", "vertical": true, "x": 700, "y": 100, "align": "left", "valign": "middle",
+      "family": "Yu Mincho", "size": 120, "weight": 700,
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+                 { "id": "BG", "type": "background", "padX": 20, "padY": 20, "radius": 8, "paint": { "type": "solid", "color": "#C8002060" } } ] },
+    { "type": "text", "id": "H", "text": "横書き（比較）", "x": 600, "y": 950, "family": "Yu Gothic UI", "size": 80, "weight": 700,
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+                 { "id": "S", "type": "stroke", "width": 8, "paint": { "type": "solid", "color": "#FF000000" } } ] }
+  ]
+}

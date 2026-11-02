@@ -1,0 +1,24 @@
+{
+  "format": "NAKA-TDP",
+  "version": 2,
+  "frame": { "width": 1920, "height": 1080, "vidScale": 30, "vidSampleSize": 1, "durationFrames": 30 },
+  "objects": [
+    { "type": "text", "id": "A", "text": "第5話\n田中(15)\n本当!?", "vertical": true,
+      "x": 1500, "y": 540, "family": "Yu Gothic UI", "size": 110, "weight": 900,
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+                 { "id": "S", "type": "stroke", "width": 10, "paint": { "type": "solid", "color": "#FF102080" } } ] },
+    { "type": "text", "id": "B", "text": "2026年[3]位", "vertical": true, "tcyDigits": 4, "tcyChars": "[]",
+      "x": 1000, "y": 540, "family": "Yu Gothic UI", "size": 110, "weight": 700,
+      "spans": [ { "start": 5, "length": 3, "paints": { "F": { "type": "solid", "color": "#FFFFE000" } } } ],
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } },
+                 { "id": "S", "type": "stroke", "width": 8, "paint": { "type": "solid", "color": "#FF000000" } },
+                 { "id": "BG", "type": "background", "padX": 16, "padY": 16, "radius": 8, "paint": { "type": "solid", "color": "#A0000000" } } ] },
+    { "type": "text", "id": "C", "text": "第5話 12月25日", "vertical": true, "tcyDigits": 0,
+      "x": 600, "y": 540, "family": "Yu Mincho", "size": 90, "weight": 700,
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } } ] },
+    { "type": "text", "id": "D", "text": "12月25日", "vertical": true,
+      "x": 300, "y": 540, "family": "Yu Gothic UI", "size": 90, "weight": 700,
+      "animIn": { "type": "pop", "unit": "char", "duration": 10, "stagger": 3 },
+      "stack": [ { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" } } ] }
+  ]
+}

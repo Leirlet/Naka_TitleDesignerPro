@@ -1,0 +1,54 @@
+{
+  "format": "NAKA-TDP",
+  "version": 2,
+  "frame": { "width": 1920, "height": 1080, "vidScale": 30, "vidSampleSize": 1, "durationFrames": 60 },
+  "objects": [
+    {
+      "type": "text", "id": "T1", "name": "金＋銀フチ 3D", "text": "GOLD 金",
+      "x": 960, "y": 200, "align": "center", "valign": "middle", "family": "Yu Gothic UI", "size": 190, "weight": 900,
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFC35A" }, "material": "lit", "metallic": 100, "roughness": 22, "bevel": "round", "bevelWidth": 7, "bevelHeight": 7 },
+        { "id": "S1", "type": "stroke", "width": 9, "position": "outer", "join": "round", "paint": { "type": "solid", "color": "#FFE8E8EC" }, "material": "lit", "metallic": 100, "roughness": 10, "bevel": "flat", "bevelWidth": 4, "bevelHeight": 4 },
+        { "id": "X", "type": "extrude", "depth": 36, "sideColor": "#FFE0A040", "sideColor2": "#FF6A4410", "bevel": "none", "metallic": 100, "roughness": 30,
+          "rotX": 10, "rotY": -22, "perspective": 50 },
+        { "id": "SH", "type": "shadow", "color": "#B4000000", "angle": 90, "distance": 10, "blur": 14 }
+      ],
+      "light": { "angle": 225, "height": 45, "intensity": 100, "ambient": 30, "env": "studio" }
+    },
+    {
+      "type": "text", "id": "T2", "name": "2D ベベルのみ", "text": "激辛祭り！",
+      "x": 960, "y": 470, "align": "center", "valign": "middle", "family": "Yu Gothic UI", "size": 150, "weight": 900,
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFFFFFFF" }, "bevel": "round", "bevelWidth": 6, "bevelHeight": 5 },
+        { "id": "S1", "type": "stroke", "width": 10, "position": "outer", "join": "round", "paint": { "type": "solid", "color": "#FFE01010" } },
+        { "id": "SH", "type": "shadow", "color": "#B4000000", "angle": 90, "distance": 8, "blur": 8 }
+      ],
+      "light": { "angle": 225, "height": 45, "intensity": 100, "ambient": 35, "env": "soft" }
+    },
+    {
+      "type": "text", "id": "T3", "name": "ヘアライン銀", "text": "SILVER 銀",
+      "x": 540, "y": 760, "align": "center", "valign": "middle", "family": "Yu Gothic UI", "size": 130, "weight": 900,
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFF2F2F0" }, "material": "lit", "metallic": 100, "roughness": 28, "brushed": true, "bevel": "flat", "bevelWidth": 4, "bevelHeight": 4 },
+        { "id": "S1", "type": "stroke", "width": 6, "position": "outer", "join": "round", "paint": { "type": "solid", "color": "#FF202020" } }
+      ],
+      "light": { "angle": 225, "height": 45, "intensity": 100, "ambient": 30, "env": "studio" }
+    },
+    {
+      "type": "text", "id": "T4", "name": "銅", "text": "COPPER 銅",
+      "x": 1400, "y": 760, "align": "center", "valign": "middle", "family": "Yu Gothic UI", "size": 130, "weight": 900,
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFF0A080" }, "material": "lit", "metallic": 100, "roughness": 30, "bevel": "cove", "bevelWidth": 6, "bevelHeight": 5 }
+      ],
+      "light": { "angle": 225, "height": 45, "intensity": 100, "ambient": 30, "env": "studio" }
+    },
+    {
+      "type": "text", "id": "T5", "name": "クローム", "text": "CHROME クローム",
+      "x": 960, "y": 960, "align": "center", "valign": "middle", "family": "Yu Gothic UI", "size": 110, "weight": 900,
+      "stack": [
+        { "id": "F", "type": "fill", "paint": { "type": "solid", "color": "#FFC8C8CC" }, "material": "lit", "metallic": 100, "roughness": 6, "bevel": "round", "bevelWidth": 5, "bevelHeight": 6 }
+      ],
+      "light": { "angle": 225, "height": 45, "intensity": 100, "ambient": 30, "env": "studio" }
+    }
+  ]
+}
