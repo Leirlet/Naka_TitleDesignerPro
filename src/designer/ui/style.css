@@ -124,15 +124,15 @@ textarea { width: 100%; resize: vertical; user-select: text; font-size: 14px; }
 #styles .tabs { display: flex; gap: 2px 8px; align-items: center; flex-wrap: wrap; padding: 4px 8px 2px; }
 .tab { border-radius: 3px 3px 0 0; }
 .tab.active { background: var(--accent2); border-color: var(--accent); color: #fff; }
-#folderBar { display: flex; gap: 4px; align-items: center; padding: 2px 8px 4px; overflow-x: auto; overflow-y: hidden; flex: none; }
-#folderBar::-webkit-scrollbar { height: 6px; }
+#folderBar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 2px 8px 4px; flex: none; max-height: 58px; overflow-y: auto; }
 .chip { flex: none; padding: 1px 10px; border-radius: 10px; white-space: nowrap; }
 .chip .count { color: var(--dim); margin-left: 4px; font-size: 11px; }
 .chip.on { background: var(--accent2); border-color: var(--accent); color: #fff; }
 .chip.on .count { color: #cfe3ff; }
 .chip.dropTarget { outline: 2px solid var(--accent); background: #24466b; }
 .chip.add { color: var(--dim); border-style: dashed; }
-#presetList { flex: 1; display: flex; gap: 8px; padding: 6px 8px; overflow-x: auto; overflow-y: hidden; min-height: 0; }
+/* cards wrap onto the next row at the window edge; the list scrolls vertically when the rows do not fit */
+#presetList { flex: 1; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px; padding: 6px 8px; overflow-x: hidden; overflow-y: auto; min-height: 0; }
 .preset.dragging { opacity: .4; }
 
 /* context menu */
