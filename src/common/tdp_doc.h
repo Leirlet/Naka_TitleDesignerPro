@@ -175,6 +175,32 @@ struct AnimSpec {
 };
 
 // ---------------------------------------------------------------- text
+// Warp of the whole text block, like Illustrator's envelope warps: the outlines are bent after the
+// layout, so strokes, 3D, animation and the rest work on the bent shape. amount is a signed % (-100..100).
+enum class WarpType { None, Arc, Arch, Bulge, Flag, Wave, Rise, Fisheye, Squeeze };
+
+struct Warp {
+	WarpType type = WarpType::None;
+	float amount = 50;
+	bool vertical = false;         // bend along the vertical axis instead of the horizontal one
+};
+
+// Fade mask over the whole text (every layer, shadows included): a soft edge that hides everything on one
+// side of it. pos = how far the edge has travelled across the text, % (100 = everything visible).
+// wipeIn / wipeOut: the edge travels from 0 to pos over that many frames at the clip start / to 0 ending at
+// the clip end (frames; 0 = no wipe).
+enum class MaskType { None, Linear, Radial };
+
+struct Mask {
+	MaskType type = MaskType::None;
+	float angle = 0;               // linear: direction the edge travels (0 = to the right, 90 = down)
+	float softness = 30;           // width of the soft edge, % of the text size
+	bool invert = false;           // show the other side
+	float pos = 100;
+	float wipeIn = 0, wipeInDelay = 0;
+	float wipeOut = 0, wipeOutDelay = 0;
+};
+
 // Metrics = the font's own kerning pairs (default); None = pairs off; Palt = proportional metrics
 // (OpenType palt / vpal), the usual way to set Japanese tight.
 enum class KernMode { Metrics, None, Palt };
@@ -237,6 +263,8 @@ struct TextObject {
 	std::vector<std::pair<int, float>> kerning; // (char index, extra spacing after it)
 	KernMode kernMode = KernMode::Metrics;
 	float opticalKern = 0;           // % of automatic optical spacing (evens out the visible gaps), 0 = off
+	Warp warp;
+	Mask mask;
 
 	std::vector<Layer> stack;
 	Light light;
@@ -275,6 +303,8 @@ struct UnitState {
 // count = number of units. In and out states are combined by the renderer.
 UnitState EvalAnim(const AnimSpec& a, bool out, int index, int count, int frame, int durationFrames);
 bool HasAnimation(const TextObject& obj);
+// Where the mask edge is at a frame, % (0 = everything hidden, 100 = everything shown).
+float MaskPosition(const Mask& m, int frame, int durationFrames);
 // Light of the text at a frame (the motion applied to angle).
 Light AnimatedLight(const Light& l, int frame, float fps);
 // Turntable rotation to add to a 3D layer's rotX / rotY at a frame.

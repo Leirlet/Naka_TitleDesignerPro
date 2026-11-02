@@ -19,6 +19,8 @@ const char* kLayerTypes[] = { "fill", "stroke", "shadow", "innerShadow", "longSh
 const char* kTurnModes[] = { "none", "spin", "sway" };
 const char* kLightMotions[] = { "none", "orbit", "sweep", "pass" };
 const char* kKernModes[] = { "metrics", "none", "palt" };
+const char* kWarpTypes[] = { "none", "arc", "arch", "bulge", "flag", "wave", "rise", "fisheye", "squeeze" };
+const char* kMaskTypes[] = { "none", "linear", "radial" };
 const char* kTexFits[] = { "cover", "contain", "stretch", "tile" };
 const char* kTexAreas[] = { "text", "frame" };
 const char* kTexBlends[] = { "normal", "multiply", "screen", "overlay", "add", "lighten", "darken", "softLight" };
@@ -435,6 +437,18 @@ bool HasSurface(const Layer& l)
 	if (l.type != LayerType::Fill && l.type != LayerType::Stroke) return false;
 	return l.material == Material::Lit || (l.bevel != BevelShape::None && l.bevelWidth > 0 && l.bevelHeight > 0)
 		|| (!l.bump.path.empty() && l.bumpDepth != 0);
+}
+
+float MaskPosition(const Mask& m, int frame, int durationFrames)
+{
+	auto smooth = [](float t) { t = Clamp01(t); return t * t * (3 - 2 * t); };
+	float e = 1;
+	if (m.wipeIn > 0) e = smooth(((float)frame - m.wipeInDelay) / m.wipeIn);
+	if (m.wipeOut > 0) {
+		const float end = (float)durationFrames - m.wipeOutDelay;
+		e *= 1 - smooth(((float)frame + 1 - (end - m.wipeOut)) / m.wipeOut);
+	}
+	return m.pos * e;
 }
 
 Light AnimatedLight(const Light& l, int frame, float fps)
@@ -881,6 +895,26 @@ Value TextObjectToJson(const TextObject& t)
 	v.set("kerning", kern);
 	v.set("kernMode", EnumName(t.kernMode, kKernModes));
 	v.set("opticalKern", t.opticalKern);
+	if (t.warp.type != WarpType::None) {
+		Value w = Value::Object();
+		w.set("type", EnumName(t.warp.type, kWarpTypes));
+		w.set("amount", t.warp.amount);
+		w.set("vertical", t.warp.vertical);
+		v.set("warp", w);
+	}
+	if (t.mask.type != MaskType::None) {
+		Value m = Value::Object();
+		m.set("type", EnumName(t.mask.type, kMaskTypes));
+		m.set("angle", t.mask.angle);
+		m.set("softness", t.mask.softness);
+		m.set("invert", t.mask.invert);
+		m.set("pos", t.mask.pos);
+		m.set("wipeIn", t.mask.wipeIn);
+		m.set("wipeInDelay", t.mask.wipeInDelay);
+		m.set("wipeOut", t.mask.wipeOut);
+		m.set("wipeOutDelay", t.mask.wipeOutDelay);
+		v.set("mask", m);
+	}
 
 	Value stack = Value::Array();
 	for (const Layer& l : t.stack) stack.push(LayerToJson(l));
@@ -949,6 +983,24 @@ TextObject TextObjectFromJson(const Value& v)
 		t.kerning.push_back({ kv["index"].asInt(0), F(kv, "value", 0) });
 	t.kernMode = EnumFrom(v["kernMode"], kKernModes, t.kernMode);
 	t.opticalKern = std::clamp(F(v, "opticalKern", 0), 0.0f, 200.0f);
+	if (v.has("warp")) {
+		const Value& w = v["warp"];
+		t.warp.type = EnumFrom(w["type"], kWarpTypes, WarpType::None);
+		t.warp.amount = std::clamp(F(w, "amount", t.warp.amount), -100.0f, 100.0f);
+		t.warp.vertical = w["vertical"].asBool(false);
+	}
+	if (v.has("mask")) {
+		const Value& m = v["mask"];
+		t.mask.type = EnumFrom(m["type"], kMaskTypes, MaskType::None);
+		t.mask.angle = F(m, "angle", t.mask.angle);
+		t.mask.softness = std::clamp(F(m, "softness", t.mask.softness), 0.0f, 200.0f);
+		t.mask.invert = m["invert"].asBool(false);
+		t.mask.pos = F(m, "pos", t.mask.pos);
+		t.mask.wipeIn = std::max(F(m, "wipeIn", 0), 0.0f);
+		t.mask.wipeInDelay = std::max(F(m, "wipeInDelay", 0), 0.0f);
+		t.mask.wipeOut = std::max(F(m, "wipeOut", 0), 0.0f);
+		t.mask.wipeOutDelay = std::max(F(m, "wipeOutDelay", 0), 0.0f);
+	}
 	for (const auto& lv : v["stack"].items()) t.stack.push_back(LayerFromJson(lv));
 	// The first Phase 3 files kept the light in the 3D layer.
 	Value light = v["light"];

@@ -225,6 +225,7 @@ struct TextShape {
 	bool background = true;      // draw background layers (only one opacity group does)
 	D2D1_MATRIX_3X2_F bgM = D2D1::IdentityMatrix(); // whole-object ("all") animation, applied to the background
 	D2D1_RECT_F box{};           // layout box (layout space)
+	D2D1_RECT_F sel{};           // box plus the warped ink: the selection frame
 	D2D1_MATRIX_3X2_F toOutput{}; // layout space -> output pixels
 	float deviceScale = 1;       // doc px -> output px, including the object's scale
 	D2D1_POINT_2F anchorOut{};   // the object's anchor in output pixels (3D turns pivot here)
@@ -467,8 +468,8 @@ public:
 		TextShape shape;
 		if (FAILED(BuildShape(doc.objects[index], 1.0f, shape))) return false;
 		const D2D1_POINT_2F corners[4] = {
-			{ shape.box.left, shape.box.top }, { shape.box.right, shape.box.top },
-			{ shape.box.right, shape.box.bottom }, { shape.box.left, shape.box.bottom } };
+			{ shape.sel.left, shape.sel.top }, { shape.sel.right, shape.sel.top },
+			{ shape.sel.right, shape.sel.bottom }, { shape.sel.left, shape.sel.bottom } };
 		const D2D1::Matrix3x2F m = *D2D1::Matrix3x2F::ReinterpretBaseType(&shape.toOutput);
 		for (int i = 0; i < 4; ++i) {
 			D2D1_POINT_2F p = m.TransformPoint(corners[i]);
@@ -553,6 +554,7 @@ private:
 	void Reset()
 	{
 		texCache_.clear();
+		warpCache_.clear();
 		Reset3D();
 		for (auto& b : slots_) b.Reset();
 		for (auto& t : slotTex_) t.Reset();
@@ -744,6 +746,8 @@ private:
 		if (FAILED(hr)) return hr;
 		hr = PlaceRuby(obj, shape.runs);
 		if (FAILED(hr)) return hr;
+		hr = ApplyWarp(obj, shape);
+		if (FAILED(hr)) return hr;
 
 		if (!shape.runs.empty()) {
 			hr = MakeUnion(shape);
@@ -757,6 +761,12 @@ private:
 		} else {
 			shape.ink = shape.box;
 		}
+
+		// The selection frame also covers where the warp took the ink.
+		shape.sel = shape.box;
+		if (obj.warp.type != WarpType::None && !shape.runs.empty() && shape.ink.left <= shape.ink.right)
+			shape.sel = D2D1::RectF(std::min(shape.box.left, shape.ink.left), std::min(shape.box.top, shape.ink.top),
+				std::max(shape.box.right, shape.ink.right), std::max(shape.box.bottom, shape.ink.bottom));
 
 		const float cx = (shape.box.left + shape.box.right) * 0.5f, cy = (shape.box.top + shape.box.bottom) * 0.5f;
 		float ax, ay;
@@ -1014,6 +1024,146 @@ private:
 		return S_OK;
 	}
 
+	// Everything that decides the outlines of a text object at rest (layout, kerning, warp): cache key.
+	static std::wstring LayoutKey(const TextObject& obj)
+	{
+		std::wstring key = obj.text + L"|" + obj.family + L"|" + obj.tcyChars;
+		wchar_t buf[200];
+		swprintf_s(buf, L"|%g|%d|%d|%g|%g|%d|%d|%g|%d|%g|%g|%d|%g|%d", obj.size, obj.weight, obj.italic ? 1 : 0, obj.tracking, obj.lineHeight,
+			obj.vertical ? 1 : 0, (int)obj.kernMode, obj.opticalKern, obj.tcyDigits, obj.rubyScale, obj.rubyGap,
+			(int)obj.warp.type, obj.warp.amount, obj.warp.vertical ? 1 : 0);
+		key += buf;
+		for (const Span& s : obj.spans) {
+			swprintf_s(buf, L"|s%d,%d,%g,%d,%g,%d,%g,", s.start, s.length, s.size, s.weight, s.tracking, s.tcy ? 1 : 0, s.baselineShift);
+			key += buf + s.family + L"," + s.ruby;
+		}
+		for (const auto& k : obj.kerning) {
+			swprintf_s(buf, L"|k%d,%g", k.first, k.second);
+			key += buf;
+		}
+		return key;
+	}
+
+	// ------------------------------------------------------------ warp
+	// Moves one point (layout space) of a text block whose ink centre is (cx, cy) and half size (hw, hh).
+	static void WarpPoint(const Warp& w, float cx, float cy, float hw, float hh, float& px, float& py)
+	{
+		const float a = std::clamp(w.amount, -100.0f, 100.0f) / 100.0f;
+		float X = px - cx, Y = py - cy;
+		float W = hw, H = hh;
+		if (w.vertical) { std::swap(X, Y); std::swap(W, H); } // work along x, swap back at the end
+		W = std::max(W, 1.0f);
+		H = std::max(H, 1.0f);
+		const float u = X / W, v = Y / H;
+		float nx = X, ny = Y;
+		switch (w.type) {
+		case WarpType::Arc: { // bend round a circle: the baseline keeps its length
+			const float theta = std::max(std::fabs(a), 1e-4f) * 1.5f * kPi; // 100% = 270 degrees
+			const float R = 2 * W / theta, sg = a >= 0 ? 1.0f : -1.0f;
+			const float phi = X / R, r = R - sg * Y;
+			nx = r * std::sin(phi);
+			ny = sg * (R - r * std::cos(phi));
+			break;
+		}
+		case WarpType::Arch: ny = Y - a * W * 0.4f * (1 - u * u); break;
+		case WarpType::Bulge: ny = Y * (1 + a * 0.9f * (1 - u * u)); nx = X * (1 + a * 0.2f * (1 - v * v)); break;
+		case WarpType::Flag: ny = Y + a * H * 1.2f * std::sin(kPi * u); break;
+		case WarpType::Wave: ny = Y * (1 + a * 0.9f * std::sin(kPi * u)); break;
+		case WarpType::Rise: ny = Y * (1 + a * 0.8f * u); break;
+		case WarpType::Fisheye: {
+			const float f = std::pow(std::max(std::hypot(u, v), 1e-3f), -0.35f * a);
+			nx = X * f;
+			ny = Y * f;
+			break;
+		}
+		case WarpType::Squeeze: nx = X * (1 - a * 0.5f * (1 - v * v)); break;
+		case WarpType::None: break;
+		}
+		if (w.vertical) std::swap(nx, ny);
+		px = cx + nx;
+		py = cy + ny;
+	}
+
+	struct WarpEntry {
+		std::wstring key;
+		std::vector<ComPtr<ID2D1Geometry>> geoms;
+		std::vector<D2D1_RECT_F> cells;
+	};
+
+	// Bends the outlines of every run. Curves are flattened and long edges cut up so that straight strokes
+	// follow the bend; the result is cached while the layout does not change.
+	HRESULT ApplyWarp(const TextObject& obj, TextShape& shape)
+	{
+		const Warp& w = obj.warp;
+		if (w.type == WarpType::None || w.amount == 0 || shape.runs.empty()) return S_OK;
+		const std::wstring key = LayoutKey(obj);
+		for (const WarpEntry& e : warpCache_)
+			if (e.key == key && e.geoms.size() == shape.runs.size()) {
+				for (size_t i = 0; i < shape.runs.size(); ++i) {
+					shape.runs[i].geometry = e.geoms[i];
+					shape.runs[i].placed = e.geoms[i];
+					shape.runs[i].cell = e.cells[i];
+				}
+				return S_OK;
+			}
+
+		D2D1_RECT_F ink = D2D1::RectF(1e9f, 1e9f, -1e9f, -1e9f);
+		for (const Run& r : shape.runs) {
+			D2D1_RECT_F b{};
+			r.geometry->GetBounds(nullptr, &b);
+			if (b.left > b.right) continue;
+			ink = D2D1::RectF(std::min(ink.left, b.left), std::min(ink.top, b.top), std::max(ink.right, b.right), std::max(ink.bottom, b.bottom));
+		}
+		if (ink.left > ink.right) return S_OK;
+		const float cx = (ink.left + ink.right) * 0.5f, cy = (ink.top + ink.bottom) * 0.5f;
+		const float hw = (ink.right - ink.left) * 0.5f, hh = (ink.bottom - ink.top) * 0.5f;
+		const float step = std::clamp(std::max(hw, hh) / 100.0f, 1.0f, 6.0f);
+
+		WarpEntry entry;
+		entry.key = key;
+		for (Run& r : shape.runs) {
+			PolySink polys;
+			HRESULT hr = r.geometry->Simplify(D2D1_GEOMETRY_SIMPLIFICATION_OPTION_LINES, nullptr, 0.1f, &polys);
+			if (FAILED(hr)) return hr;
+			std::vector<Poly> bent;
+			for (const Poly& f : polys.figures) {
+				if (f.size() < 2) continue;
+				Poly out;
+				for (size_t i = 0; i < f.size(); ++i) {
+					const D2D1_POINT_2F a = f[i], b = f[(i + 1) % f.size()];
+					const int n = std::max(1, (int)std::ceil(std::hypot(b.x - a.x, b.y - a.y) / step));
+					for (int k = 0; k < n; ++k) {
+						float x = a.x + (b.x - a.x) * k / n, y = a.y + (b.y - a.y) * k / n;
+						WarpPoint(w, cx, cy, hw, hh, x, y);
+						out.push_back(D2D1::Point2F(x, y));
+					}
+				}
+				bent.push_back(std::move(out));
+			}
+			if (!bent.empty()) {
+				ComPtr<ID2D1PathGeometry> path;
+				hr = PolysToGeometry(bent, path);
+				if (FAILED(hr)) return hr;
+				r.geometry = path;
+				r.placed = path;
+			}
+			// The cell follows: bounds of its warped corners.
+			D2D1_RECT_F c = D2D1::RectF(1e9f, 1e9f, -1e9f, -1e9f);
+			for (const D2D1_POINT_2F p0 : { D2D1::Point2F(r.cell.left, r.cell.top), D2D1::Point2F(r.cell.right, r.cell.top),
+				D2D1::Point2F(r.cell.right, r.cell.bottom), D2D1::Point2F(r.cell.left, r.cell.bottom) }) {
+				float x = p0.x, y = p0.y;
+				WarpPoint(w, cx, cy, hw, hh, x, y);
+				c = D2D1::RectF(std::min(c.left, x), std::min(c.top, y), std::max(c.right, x), std::max(c.bottom, y));
+			}
+			r.cell = c;
+			entry.geoms.push_back(r.geometry);
+			entry.cells.push_back(c);
+		}
+		if (warpCache_.size() >= 4) warpCache_.erase(warpCache_.begin());
+		warpCache_.push_back(std::move(entry));
+		return S_OK;
+	}
+
 	// Extra spacing after each character (UTF-16 index) that evens out the visible gaps between
 	// neighbouring glyphs: the gap of a pair is the average clearance between the two outlines over
 	// the height of the line; pairs wider than the text's average close up, tighter ones open.
@@ -1022,24 +1172,13 @@ private:
 		const int len = (int)obj.text.size();
 		out.assign(len, 0.0f);
 
-		std::wstring key = obj.text + L"|" + obj.family + L"|" + obj.tcyChars;
-		wchar_t buf[160];
-		swprintf_s(buf, L"|%g|%d|%d|%g|%g|%d|%d|%g|%d", obj.size, obj.weight, obj.italic ? 1 : 0, obj.tracking, obj.lineHeight,
-			obj.vertical ? 1 : 0, (int)obj.kernMode, obj.opticalKern, obj.tcyDigits);
-		key += buf;
-		for (const Span& s : obj.spans) {
-			swprintf_s(buf, L"|s%d,%d,%g,%d,%g,%d,", s.start, s.length, s.size, s.weight, s.tracking, s.tcy ? 1 : 0);
-			key += buf + s.family;
-		}
-		for (const auto& k : obj.kerning) {
-			swprintf_s(buf, L"|k%d,%g", k.first, k.second);
-			key += buf;
-		}
+		const std::wstring key = LayoutKey(obj);
 		for (const auto& c : opticalCache_)
 			if (c.first == key) { out = c.second; return S_OK; }
 
 		TextObject plain = obj;
 		plain.opticalKern = 0;
+		plain.warp.type = WarpType::None; // the outlines are measured as laid out
 		TextShape sh;
 		HRESULT hr = BuildShape(plain, 1.0f, sh);
 		if (FAILED(hr)) return hr;
@@ -1564,6 +1703,53 @@ private:
 	}
 
 	static D2D1_POINT_2F Origin() { return D2D1::Point2F(0, 0); }
+
+	// Fade mask: multiplies the finished text (kAccum) by a soft edge that travels across the text block.
+	HRESULT ApplyMask(const TextObject& obj, const TextShape& shape)
+	{
+		const Mask& m = obj.mask;
+		const float pos = MaskPosition(m, curFrame_, curDuration_) / 100.0f;
+		const float soft = std::clamp(m.softness / 100.0f, 0.001f, 2.0f);
+		// The edge centre runs from -soft/2 (all hidden) to 1 + soft/2 (all shown); alpha is 1 before p0, 0 after p1.
+		const float c = -soft * 0.5f + pos * (1 + soft), p0 = c - soft * 0.5f, p1 = c + soft * 0.5f;
+		auto alphaAt = [&](float t) {
+			const float a = std::clamp((p1 - t) / (p1 - p0), 0.0f, 1.0f);
+			return m.invert ? 1 - a : a;
+		};
+		const float ts[4] = { 0.0f, std::clamp(p0, 0.0f, 1.0f), std::clamp(p1, 0.0f, 1.0f), 1.0f };
+		D2D1_GRADIENT_STOP stops[4];
+		for (int i = 0; i < 4; ++i) stops[i] = { ts[i], D2D1::ColorF(0, 0, 0, alphaAt(ts[i])) };
+		ComPtr<ID2D1GradientStopCollection> coll;
+		HRESULT hr = dc_->CreateGradientStopCollection(stops, 4, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &coll);
+		if (FAILED(hr)) return hr;
+
+		const D2D1_RECT_F ink = shape.ink.left <= shape.ink.right ? shape.ink : shape.box;
+		const float cx = (ink.left + ink.right) * 0.5f, cy = (ink.top + ink.bottom) * 0.5f;
+		const float hw = std::max((ink.right - ink.left) * 0.5f, 1.0f), hh = std::max((ink.bottom - ink.top) * 0.5f, 1.0f);
+		ComPtr<ID2D1Brush> brush;
+		if (m.type == MaskType::Radial) {
+			const float R = std::hypot(hw, hh);
+			ComPtr<ID2D1RadialGradientBrush> b;
+			hr = dc_->CreateRadialGradientBrush(D2D1::RadialGradientBrushProperties(D2D1::Point2F(cx, cy), D2D1::Point2F(0, 0), R, R), coll.Get(), &b);
+			brush = b;
+		} else {
+			const float a = m.angle * kPi / 180.0f, dx = std::cos(a), dy = std::sin(a);
+			const float ext = std::fabs(hw * dx) + std::fabs(hh * dy);
+			ComPtr<ID2D1LinearGradientBrush> b;
+			hr = dc_->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(
+				D2D1::Point2F(cx - dx * ext, cy - dy * ext), D2D1::Point2F(cx + dx * ext, cy + dy * ext)), coll.Get(), &b);
+			brush = b;
+		}
+		if (FAILED(hr)) return hr;
+
+		Target(kA, true);
+		dc_->SetTransform(*D2D1::Matrix3x2F::ReinterpretBaseType(&shape.toOutput));
+		dc_->FillRectangle(D2D1::RectF(-1e5f, -1e5f, 1e5f, 1e5f), brush.Get());
+		dc_->SetTransform(D2D1::IdentityMatrix());
+		Target(kAccum, false);
+		dc_->DrawImage(Slot(kA), Origin(), D2D1_INTERPOLATION_MODE_LINEAR, D2D1_COMPOSITE_MODE_DESTINATION_IN);
+		return S_OK;
+	}
 
 	// Gaussian blur of a whole slot in place (stdDev in output px). Uses kA as scratch.
 	HRESULT BlurSlot(int slot, float stdDev)
@@ -2370,6 +2556,11 @@ private:
 			dc_->DrawImage(Slot(kTmp), Origin(), D2D1_INTERPOLATION_MODE_LINEAR, D2D1_COMPOSITE_MODE_DESTINATION_OVER);
 		}
 
+		if (obj.mask.type != MaskType::None) {
+			hr = ApplyMask(obj, shape);
+			if (FAILED(hr)) return hr;
+		}
+
 		Target(kFrame, false);
 		dc_->PushLayer(D2D1::LayerParameters1(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
 			D2D1::IdentityMatrix(), opacity), nullptr);
@@ -2389,6 +2580,7 @@ private:
 		docW_ = doc.width;
 		docH_ = doc.height;
 		curFrame_ = frame;
+		curDuration_ = doc.durationFrames;
 		curFps_ = (float)doc.vidScale / (float)std::max(doc.vidSampleSize, 1);
 		dc_->BeginDraw();
 		dc_->SetTransform(D2D1::IdentityMatrix());
@@ -2465,6 +2657,8 @@ private:
 	std::vector<MeshCache> meshCache_; // oldest first
 	std::vector<std::pair<std::wstring, std::vector<float>>> opticalCache_; // optical kerning, oldest first
 	std::vector<TexSlot> texCache_;    // texture frames as Direct2D bitmaps, oldest first
+	std::vector<WarpEntry> warpCache_; // warped outlines, oldest first
+	int curDuration_ = 150;
 	// state of the frame being rendered
 	Light curLight_;
 	int curFrame_ = 0;

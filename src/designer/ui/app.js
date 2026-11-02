@@ -1208,7 +1208,7 @@ function buildProps() {
   props.append(objectsSection());
   const o = obj();
   if (o) {
-    props.append(textSection(o), transformSection(o), fontSection(o), rangeSection(o), stackSection(o), lightSection(o), animSection(o));
+    props.append(textSection(o), transformSection(o), fontSection(o), warpSection(o), rangeSection(o), stackSection(o), lightSection(o), animSection(o), maskSection(o));
   } else {
     props.append(section('ヒント', 'hint', el('div', { class: 'hint', text: 'テキストをクリックして選択します。T ツールでクリックした位置にテキストを追加できます。' })));
   }
@@ -1448,6 +1448,43 @@ function fontSection(o) {
     num('ルビの大きさ', () => o.rubyScale ?? 50, (v) => { o.rubyScale = v; }, { unit: '%', min: 10, max: 200 }),
     num('ルビの間隔', () => o.rubyGap ?? 0, (v) => { o.rubyGap = v; }, { unit: 'px', step: 0.5 }),
     el('div', { class: 'hint', text: 'ルビはテキスト欄で文字を選び、「文字ごとの設定」の「ルビ」に入力します。' }));
+}
+
+// Mirrors Warp / Mask in tdp_doc.h.
+const WARP_TYPES = [['none', 'なし'], ['arc', '円弧（円に沿って曲げる）'], ['arch', 'アーチ（山なり）'], ['bulge', '膨らみ'], ['flag', '旗'], ['wave', '波'],
+  ['rise', '上昇（右が高くなる）'], ['fisheye', '魚眼'], ['squeeze', '絞り']];
+const MASK_DEFAULTS = { type: 'none', angle: 0, softness: 30, invert: false, pos: 100, wipeIn: 0, wipeInDelay: 0, wipeOut: 0, wipeOutDelay: 0 };
+
+function warpSection(o) {
+  const w = o.warp = Object.assign({ type: 'none', amount: 50, vertical: false }, o.warp);
+  const parts = [select('形', WARP_TYPES, () => w.type, (v) => { w.type = v; }, true)];
+  if (w.type !== 'none') {
+    parts.push(num('量', () => w.amount, (v) => { w.amount = v; }, { unit: '%（負で逆向き）', min: -100, max: 100 }));
+    parts.push(seg('向き', [[false, '横方向（上下に曲がる）'], [true, '縦方向（左右に曲がる）']], () => !!w.vertical, (v) => { w.vertical = v; }));
+    parts.push(el('div', { class: 'hint', text: '文字の並び全体（複数行も 1 つのまとまり）を曲げます。フチ・影・3D・アニメーションは曲げた形に対してかかります。文字ごとの 3D 回転などのアニメは、曲げた後の位置で動きます。' }));
+  }
+  return section('テキストの変形（ワープ）', 'warp', ...parts);
+}
+
+function maskSection(o) {
+  const m = o.mask = Object.assign({}, MASK_DEFAULTS, o.mask);
+  const parts = [seg('種類', [['none', 'なし'], ['linear', '線形'], ['radial', '円形']], () => m.type, (v) => { m.type = v; changed(true); })];
+  if (m.type !== 'none') {
+    if (m.type === 'linear') {
+      parts.push(seg('進む向き', [[0, '→ 右へ'], [90, '↓ 下へ'], [180, '← 左へ'], [270, '↑ 上へ']], () => m.angle, (v) => { m.angle = v; changed(true); }));
+      parts.push(num('角度', () => m.angle, (v) => { m.angle = v; }, { unit: '°（0 = 右へ, 90 = 下へ）' }));
+    }
+    parts.push(num('ぼかし幅', () => m.softness, (v) => { m.softness = v; }, { unit: '%（境目のやわらかさ）', min: 0, max: 200 }));
+    parts.push(num('位置', () => m.pos, (v) => { m.pos = v; }, { unit: '%（0 = 全部隠す, 100 = 全部見せる）' }));
+    parts.push(check('反対側を見せる', () => m.invert, (v) => { m.invert = v; }));
+    parts.push(el('div', { class: 'animTitle', text: 'ワイプ' }));
+    parts.push(num('登場の長さ', () => m.wipeIn, (v) => { m.wipeIn = v; }, { unit: 'フレーム（0 = なし）', min: 0 }));
+    if (m.wipeIn > 0) parts.push(num('登場の遅れ', () => m.wipeInDelay, (v) => { m.wipeInDelay = v; }, { unit: 'フレーム', min: 0 }));
+    parts.push(num('退場の長さ', () => m.wipeOut, (v) => { m.wipeOut = v; }, { unit: 'フレーム（0 = なし。クリップの最後で終わる）', min: 0 }));
+    if (m.wipeOut > 0) parts.push(num('退場の余白', () => m.wipeOutDelay, (v) => { m.wipeOutDelay = v; }, { unit: 'フレーム', min: 0 }));
+    parts.push(el('div', { class: 'hint', text: '全部の層（影や 3D も）をまとめて、境目より先を透明にします。「位置」を下げたままにすると、下半分だけ薄くなどの固定のフェードに、ワイプを使うと、境目が走って現れる・消える動きになります（登場時は 0 → 位置、退場は位置 → 0）。円形は中心から広がる（絞る）動きです。' }));
+  }
+  return section('フェードマスク（ワイプ）', 'mask', ...parts);
 }
 
 // "文字ごとの設定": applies to the range selected in the text box.
