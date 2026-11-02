@@ -11,18 +11,21 @@
 #include <dwrite.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <wrl.h>
 
 #include "WebView2.h"
 
 #include "tdp_doc.h"
 #include "tdp_json.h"
+#include "tdp_media.h"
 #include "tdp_render.h"
 
 #include <algorithm>
 #include <chrono>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 using Microsoft::WRL::Callback;
@@ -176,6 +179,50 @@ Value FontList()
 	return arr;
 }
 
+// File dialog for a texture (image or video). Empty if cancelled.
+std::wstring PickTextureFile()
+{
+	std::wstring result;
+	ComPtr<IFileOpenDialog> dlg;
+	if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&dlg)))) return result;
+	const COMDLG_FILTERSPEC types[] = {
+		{ L"画像・動画", L"*.png;*.jpg;*.jpeg;*.jfif;*.bmp;*.tif;*.tiff;*.gif;*.webp;*.mov;*.mp4;*.m4v;*.webm;*.avi;*.mkv;*.mxf;*.mpg" },
+		{ L"すべてのファイル", L"*.*" },
+	};
+	dlg->SetFileTypes(ARRAYSIZE(types), types);
+	dlg->SetTitle(L"テクスチャにする画像・動画を選ぶ");
+	if (SUCCEEDED(dlg->Show(g.wnd))) {
+		ComPtr<IShellItem> item;
+		PWSTR p = nullptr;
+		if (SUCCEEDED(dlg->GetResult(&item)) && SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &p))) {
+			result = p;
+			CoTaskMemFree(p);
+		}
+	}
+	return result;
+}
+
+// What the renderer can do with a texture file right now (never starts a conversion).
+Value TextureInfoJson(const std::wstring& path)
+{
+	const tdp::media::Info info = tdp::media::Lookup(path);
+	Value v = Value::Object();
+	v.set("type", "textureInfo");
+	v.set("path", path);
+	v.set("ok", info.ok);
+	v.set("video", info.video);
+	// A video that is not converted yet: the page asks for it (prepareTexture) or the renderer starts it.
+	v.set("converting", info.converting);
+	v.set("needsConversion", !info.ok && info.video && info.error.empty() && !info.converting);
+	v.set("done", tdp::media::ConvertedFrames(path));
+	v.set("width", info.w);
+	v.set("height", info.h);
+	v.set("frames", info.frames);
+	v.set("fps", info.fps);
+	v.set("error", info.error);
+	return v;
+}
+
 void SendInit()
 {
 	Value v = Value::Object();
@@ -241,6 +288,23 @@ void HandleRender(const Value& m)
 			quads.push(qv);
 		}
 		info.set("quads", quads);
+		// Character cells of one object (for the kerning handles): the page asks with "cells": object index.
+		if (m["cells"].isNumber() && m["cells"].asInt(-1) >= 0) {
+			std::vector<tdp::CharCell> cells;
+			Value cv = Value::Array();
+			if (tdp::GetObjectCells(doc, (size_t)m["cells"].asInt(0), cells)) {
+				for (const tdp::CharCell& c : cells) {
+					Value one = Value::Object();
+					one.set("ch", c.ch);
+					Value q = Value::Array();
+					for (float f : c.quad) q.push(Value(f));
+					one.set("q", q);
+					cv.push(one);
+				}
+			}
+			info.set("cells", cv);
+			info.set("cellsObject", m["cells"].asInt(0));
+		}
 	}
 	web17->PostSharedBufferToScript(buffer.Get(), COREWEBVIEW2_SHARED_BUFFER_ACCESS_READ_ONLY,
 		tdp::json::FromUtf8(info.dump(false)).c_str());
@@ -272,6 +336,21 @@ void HandleMessage(const Value& m)
 		if (!tdp::WriteFileUtf8(PresetsPath(), m["data"].dump(true))) PostError(L"プリセットを保存できませんでした。");
 	} else if (type == "devtools") {
 		if (g.devtools) g.web->OpenDevToolsWindow();
+	} else if (type == "pickTexture") {
+		Value v = Value::Object();
+		v.set("type", "texturePicked");
+		v.set("id", m["id"].isString() ? m["id"].asString() : std::string());
+		v.set("path", PickTextureFile());
+		PostJson(v);
+	} else if (type == "textureInfo") {
+		PostJson(TextureInfoJson(m["path"].asWString(L"")));
+	} else if (type == "prepareTexture") {
+		// Makes the frame cache of a video in the background (stills need nothing); the page polls textureInfo.
+		const std::wstring path = m["path"].asWString(L"");
+		const tdp::media::Info info = tdp::media::Lookup(path);
+		if (!info.ok && info.video && info.error.empty() && !info.converting)
+			std::thread([path]() { tdp::media::Prepare(path); }).detach();
+		PostJson(TextureInfoJson(path));
 	}
 }
 

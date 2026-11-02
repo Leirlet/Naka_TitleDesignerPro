@@ -153,6 +153,10 @@ textarea { width: 100%; resize: vertical; user-select: text; font-size: 14px; }
 .preset .more { position: absolute; left: 2px; top: 2px; display: none; padding: 0 5px; background: #000a; border: none; }
 .preset:hover .more { display: block; }
 
+/* texture editor */
+.texName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.texStatus.bad { color: #f0a050; white-space: pre-wrap; }
+
 /* animation */
 .animBox { display: flex; flex-direction: column; gap: 5px; padding: 6px; border: 1px solid var(--line); background: #2a2a2a; }
 .animTitle { font-weight: 600; }

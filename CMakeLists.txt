@@ -43,12 +43,13 @@ add_custom_command(
 add_library(tdp_core STATIC
 	src/common/tdp_json.cpp
 	src/common/tdp_doc.cpp
+	src/common/tdp_media.cpp
 	src/common/tdp_render.cpp
 	${SHADER_HEADERS})
 target_include_directories(tdp_core PUBLIC src/common)
 target_include_directories(tdp_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 target_compile_definitions(tdp_core PRIVATE NOMINMAX)
-target_link_libraries(tdp_core PUBLIC d3d11 dxgi d2d1 dwrite dxguid)
+target_link_libraries(tdp_core PUBLIC d3d11 dxgi d2d1 dwrite dxguid windowscodecs shell32 ole32)
 
 # ---------------------------------------------------------------- importer implementation DLL
 add_library(tdp_importer_impl SHARED src/importer/tdp_importer.cpp)

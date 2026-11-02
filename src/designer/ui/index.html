@@ -41,6 +41,7 @@
     <nav id="tools">
       <button class="tool active" data-tool="select" title="選択ツール (V)">↖</button>
       <button class="tool" data-tool="text" title="テキストツール: クリックした位置に追加 (T)">T</button>
+      <button class="tool" data-tool="kern" title="カーニングツール (K): 文字の間をクリックして選び、← → で広げる・狭める（Shift = 大きく、Alt = 細かく、Tab = 次の隙間、Delete = 元に戻す）">A↔</button>
     </nav>
 
     <section id="stageWrap">
@@ -72,6 +73,7 @@
       <button class="tab" data-tab="title">テロップ全体</button>
       <span class="grow"></span>
       <label class="toggle" id="keepFontBox" title="スタイルを適用するとき、選択中のテキストのフォント（書体・太さ・斜体・字間）はそのままにして、色・フチ・影などだけ変える"><input type="checkbox" id="chkKeepFont"> フォントを維持して適用</label>
+      <label class="toggle" id="keepLightBox" title="スタイルを適用するとき、選択中のテキストのライトと映り込み（光の方向・高さ・強さ・環境光・映り込み）はそのままにする。オフのときは、光の設定を含むスタイルが今の光を上書きする"><input type="checkbox" id="chkKeepLight"> ライトを維持して適用</label>
       <button id="btnSavePreset">現在の設定を保存</button>
     </div>
     <div id="folderBar"></div>

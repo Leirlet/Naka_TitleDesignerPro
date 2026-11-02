@@ -4,6 +4,7 @@
 #include "tdp_json.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,7 +17,27 @@ struct GradientStop {
 	uint32_t color = 0xFFFFFFFF; // ARGB
 };
 
-enum class PaintType { Solid, Linear, Radial, Stripe, Dots };
+// Image or video (with alpha) laid over a shape. Videos are read through a cache of PNG frames made
+// by ffmpeg (tdp_media.h); stills are read directly.
+enum class TexFit { Cover, Contain, Stretch, Tile };
+enum class TexArea { Text, Frame };   // what the texture is fitted to: the text block (moves with it) or the whole frame
+enum class TexBlend { Normal, Multiply, Screen, Overlay, Add, Lighten, Darken, SoftLight };
+
+struct Texture {
+	std::wstring path;
+	TexArea area = TexArea::Text;
+	TexFit fit = TexFit::Cover;
+	float scale = 100;             // %
+	float offsetX = 0, offsetY = 0; // doc px
+	float rotation = 0;            // degrees
+	TexBlend blend = TexBlend::Normal;
+	float opacity = 100;           // %
+	float speed = 100;             // video: playback speed, %
+	float startTime = 0;           // video: seconds into the clip at the first frame
+	bool loop = true;              // video: repeat, otherwise hold the last frame
+};
+
+enum class PaintType { Solid, Linear, Radial, Stripe, Dots, Texture };
 
 struct Paint {
 	PaintType type = PaintType::Solid;
@@ -26,10 +47,13 @@ struct Paint {
 	std::vector<GradientStop> stops; // linear / radial
 	float size = 10;               // stripe: stripe width; dots: dot diameter (doc px)
 	float gap = 10;                // stripe: gap between stripes; dots: centre-to-centre spacing (doc px)
+	// texture: `tex` is laid over `base` (any other paint; none = transparent underneath)
+	Texture tex;
+	std::shared_ptr<const Paint> base;
 };
 
 // ---------------------------------------------------------------- appearance stack
-enum class LayerType { Fill, Stroke, Shadow, InnerShadow, LongShadow, Background, Extrude };
+enum class LayerType { Fill, Stroke, Shadow, InnerShadow, LongShadow, Background, Extrude, Texture };
 enum class StrokePosition { Outer, Center, Inner };
 enum class LineJoin { Miter, Round, Bevel };
 enum class BevelShape { None, Flat, Round, Cove };
@@ -38,6 +62,8 @@ enum class BevelShape { None, Flat, Round, Cove };
 enum class Material { None, Lit };
 // Surroundings reflected by lit surfaces: soft (the Phase 3 look) or a high-contrast studio for metal.
 enum class EnvStyle { Soft, Studio };
+// Turning of the 3D layer over time: constant spin, or swaying to and fro.
+enum class TurnMode { None, Spin, Sway };
 
 // One entry of the appearance stack. Index 0 is the front-most layer.
 // Shadow / long shadow cast the combined shape of every layer in front of them.
@@ -79,13 +105,31 @@ struct Layer {
 	float bevelWidth = 4, bevelHeight = 4; // doc px: inset from the edge / height (3D: depth taken)
 	float rotX = 0, rotY = 0;            // degrees, whole object
 	float perspective = 50;              // 0 = almost none .. 100 = strong
+	// Turntable: added to rotX / rotY by the clip time. Spin = turnSpeed degrees per second; sway =
+	// +- turnAmount degrees with a period of turnPeriod seconds. turnPhase: starting angle / phase.
+	TurnMode turn = TurnMode::None;
+	bool turnX = false;                  // around the horizontal axis instead of the vertical one
+	float turnSpeed = 90, turnAmount = 25, turnPeriod = 3, turnPhase = 0;
 
 	// Material: 3D layer sides (always lit), fill / stroke when material == Lit.
 	Material material = Material::None;
 	float metallic = 0;                  // %
 	float roughness = 40;                // %
 	bool brushed = false;                // hairline streaks (fill / stroke)
+
+	// Bump (fill / stroke): the brightness of the texture is a height map for the surface shading.
+	Texture bump;                        // empty path = none
+	float bumpDepth = 4;                 // px of height for white (negative = sunk in)
+
+	// Texture layer: laid over everything in front of it, blended; clip = only where those layers are.
+	Texture tex;
+	bool clip = true;
 };
+
+// Orbit = the light circles the text once per `period` seconds; Sweep = swings +- range/2 degrees
+// around `angle` with that period; Pass = moves once from angle - range/2 to angle + range/2 during
+// `duration` frames starting at frame `start`.
+enum class LightMotion { None, Orbit, Sweep, Pass };
 
 // Light shared by the 3D layer and lit / bevelled fills and strokes of one text object.
 struct Light {
@@ -94,6 +138,10 @@ struct Light {
 	float intensity = 100;               // %
 	float ambient = 35;                  // %
 	EnvStyle env = EnvStyle::Soft;
+	LightMotion motion = LightMotion::None;
+	float range = 180;                   // degrees
+	float period = 4;                    // seconds
+	float start = 0, duration = 60;      // frames (pass)
 };
 
 // ---------------------------------------------------------------- animation
@@ -102,7 +150,10 @@ struct Light {
 // and is the in-motion played backwards (so slide "from the left" leaves to the left).
 // Flip3D: turns around the vertical (dir left / right) or horizontal (up / down) axis. Real 3D with
 // a 3D layer in the stack, squashed flat otherwise.
-enum class AnimType { None, Fade, Typewriter, Pop, Zoom, Drop, Rise, Slide, Spin, Flip3D };
+// FlyZ: comes from behind (dir left) or from in front of (right) the text plane. Hinge: turns around
+// the edge named by dir (left / right edge: a door, down edge: a domino standing up). Tumble: turns
+// around both axes. Grow: the 3D layer's extrusion grows from flat.
+enum class AnimType { None, Fade, Typewriter, Pop, Zoom, Drop, Rise, Slide, Spin, Flip3D, FlyZ, Hinge, Tumble, Grow };
 enum class AnimUnit { Char, Line, All };
 enum class AnimOrder { Forward, Backward, CenterOut, EdgesIn, Random };
 enum class AnimEase { Auto, Linear, Out, InOut, Back, Bounce, Elastic };
@@ -117,12 +168,15 @@ struct AnimSpec {
 	float duration = 12;              // frames each unit takes
 	float stagger = 2;                // frames between consecutive units
 	float delay = 0;                  // in: frames before the first unit starts; out: frames before the clip end
-	float amount = 0;                 // 0 = type default. pop / zoom: start scale %, drop / rise / slide: distance px, spin / flip3D: degrees
+	float amount = 0;                 // 0 = type default. pop / zoom: start scale %, drop / rise / slide / flyZ: distance px, spin / flip3D / hinge / tumble: degrees
 	bool fade = true;                 // fade the unit in together with the motion (types other than fade / typewriter)
 	int seed = 1;                     // random order
 };
 
 // ---------------------------------------------------------------- text
+// Metrics = the font's own kerning pairs (default); None = pairs off; Palt = proportional metrics
+// (OpenType palt / vpal), the usual way to set Japanese tight.
+enum class KernMode { Metrics, None, Palt };
 enum class HAlign { Left, Center, Right };
 enum class VAlign { Top, Middle, Bottom };
 
@@ -180,6 +234,8 @@ struct TextObject {
 
 	std::vector<Span> spans;
 	std::vector<std::pair<int, float>> kerning; // (char index, extra spacing after it)
+	KernMode kernMode = KernMode::Metrics;
+	float opticalKern = 0;           // % of automatic optical spacing (evens out the visible gaps), 0 = off
 
 	std::vector<Layer> stack;
 	Light light;
@@ -210,11 +266,20 @@ float ObjectOpacity(const TextObject& obj); // 0..1
 struct UnitState {
 	float dx = 0, dy = 0, scale = 1, rotation = 0, opacity = 1;
 	float rotX = 0, rotY = 0;
+	float dz = 0;                    // doc px away from the viewer
+	float depth = 1;                 // factor on the 3D layer's extrusion depth
+	float px = 0, py = 0;            // pivot of scale / rotation, from the unit centre in unit sizes (+x right, +y down)
 };
 // State of one unit for one animation (in or out). index = position of the unit in reading order,
 // count = number of units. In and out states are combined by the renderer.
 UnitState EvalAnim(const AnimSpec& a, bool out, int index, int count, int frame, int durationFrames);
 bool HasAnimation(const TextObject& obj);
+// Light of the text at a frame (the motion applied to angle).
+Light AnimatedLight(const Light& l, int frame, float fps);
+// Turntable rotation to add to a 3D layer's rotX / rotY at a frame.
+void TurnOf(const Layer& l, int frame, float fps, float& dRotX, float& dRotY);
+// Frame of a texture (video) to show at a doc frame: index in [0, count).
+int TextureFrameIndex(const Texture& t, int frame, float fps, int count, double texFps);
 // Index of the 3D layer that is drawn (first enabled one), or -1.
 int Extrude3DIndex(const TextObject& obj);
 // Fill / stroke drawn with the surface pass (bevel or lit material).
@@ -223,6 +288,8 @@ bool HasSurface(const Layer& l);
 // Tate-chu-yoko groups (start, length) of a vertical text object, in text order. Empty for horizontal text.
 std::vector<std::pair<int, int>> TcyRanges(const TextObject& obj);
 
+json::Value TextureToJson(const Texture& t);
+Texture TextureFromJson(const json::Value& v);
 json::Value PaintToJson(const Paint& p);
 Paint PaintFromJson(const json::Value& v);
 json::Value LayerToJson(const Layer& l);

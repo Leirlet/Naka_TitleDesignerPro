@@ -41,15 +41,20 @@ function cssColor(c) {
 
 const LAYER_LABELS = {
   fill: '塗り', stroke: 'フチ', shadow: 'シャドウ', innerShadow: '内側シャドウ',
-  longShadow: 'ロングシャドウ', background: '背景（座布団）', extrude: '3D（押し出し）',
+  longShadow: 'ロングシャドウ', background: '背景（座布団）', extrude: '3D（押し出し）', texture: 'テクスチャ（重ね）',
 };
 const WEIGHTS = [[100, '100 極細'], [200, '200'], [300, '300 細'], [400, '400 標準'], [500, '500 中'],
   [600, '600'], [700, '700 太'], [800, '800'], [900, '900 極太']];
 
 // Mirrors Light in tdp_doc.h.
-const LIGHT_DEFAULTS = { angle: 225, height: 45, intensity: 100, ambient: 35, env: 'soft' };
+const LIGHT_DEFAULTS = { angle: 225, height: 45, intensity: 100, ambient: 35, env: 'soft', motion: 'none', range: 180, period: 4, start: 0, duration: 60 };
 // Fill / stroke surface defaults (Layer in tdp_doc.h).
-const SURFACE_DEFAULTS = { material: 'none', metallic: 0, roughness: 40, brushed: false, bevel: 'none', bevelWidth: 4, bevelHeight: 4 };
+const SURFACE_DEFAULTS = { material: 'none', metallic: 0, roughness: 40, brushed: false, bevel: 'none', bevelWidth: 4, bevelHeight: 4, bumpDepth: 4 };
+// Mirrors Texture in tdp_doc.h.
+const makeTexture = (over) => Object.assign({ path: '', area: 'text', fit: 'cover', scale: 100, offsetX: 0, offsetY: 0, rotation: 0,
+  blend: 'normal', opacity: 100, speed: 100, startTime: 0, loop: true }, over);
+const BLENDS = [['normal', '通常'], ['multiply', '乗算（暗く重ねる）'], ['screen', 'スクリーン（光・粒子向け）'], ['overlay', 'オーバーレイ'],
+  ['add', '加算（光る）'], ['lighten', '比較（明）'], ['darken', '比較（暗）'], ['softLight', 'ソフトライト']];
 // [label, material values, colour or null]. Picking one rewrites the layer's paint to the colour.
 const SURFACE_PRESETS = [
   ['なし（2D の色）', { material: 'none', metallic: 0, roughness: 40, brushed: false }, null],
@@ -103,7 +108,12 @@ function surfaceEditor(o, l) {
     parts.push(num('ベベルの幅', () => l.bevelWidth, (v) => { l.bevelWidth = v; }, { unit: 'px', min: 0, step: 0.5 }));
     parts.push(num('ベベルの高さ', () => l.bevelHeight, (v) => { l.bevelHeight = v; }, { unit: 'px', min: 0, step: 0.5 }));
   }
-  parts.push(el('div', { class: 'hint', text: '材質「あり」は、この層の色を素の色にして、光と映り込み（「ライトと映り込み」）で描きます。プリセットは色も書き換えます。ベベルはこの層の形の縁に付きます。' }));
+  // Bump: the brightness of a texture is the height of the surface (lit by the light below).
+  l.bump = l.bump || makeTexture({});
+  parts.push(el('div', { class: 'animTitle', text: '凹凸（バンプ）' }));
+  parts.push(textureEditor(l.bump, { bump: true }));
+  if (l.bump.path) parts.push(num('凹凸の高さ', () => l.bumpDepth, (v) => { l.bumpDepth = v; }, { unit: 'px（負で凹む）', step: 0.5 }));
+  parts.push(el('div', { class: 'hint', text: '材質「あり」は、この層の色を素の色にして、光と映り込み（「ライトと映り込み」）で描きます。プリセットは色も書き換えます。ベベルはこの層の形の縁に付きます。凹凸は画像の明るさを高さにして、光で陰影を付けます（明るい所が盛り上がる）。' }));
   return el('div', { style: 'display:flex;flex-direction:column;gap:5px' }, ...parts);
 }
 
@@ -115,7 +125,16 @@ function lightSection(o) {
     num('光の強さ', () => L.intensity, (v) => { L.intensity = v; }, { unit: '%', min: 0, max: 300 }),
     num('環境光', () => L.ambient, (v) => { L.ambient = v; }, { unit: '%', min: 0, max: 100 }),
     seg('映り込み', [['soft', 'やわらか'], ['studio', 'スタジオ（金属向け）']], () => L.env, (v) => { L.env = v; }),
-    el('div', { class: 'hint', text: '3D 層と、材質・ベベルを使う塗り・フチで共通です。' }));
+    seg('光の動き', [['none', 'なし'], ['orbit', '回る'], ['sweep', '行き来'], ['pass', '一度通る']], () => L.motion, (v) => { L.motion = v; changed(true); }),
+    ...(L.motion === 'orbit' ? [num('一周する時間', () => L.period, (v) => { L.period = v; }, { unit: '秒', min: 0.1, step: 0.1 })] : []),
+    ...(L.motion === 'sweep' ? [
+      num('振れ幅', () => L.range, (v) => { L.range = v; }, { unit: '°（来る方向を中心に左右へ）' }),
+      num('1往復の時間', () => L.period, (v) => { L.period = v; }, { unit: '秒', min: 0.1, step: 0.1 })] : []),
+    ...(L.motion === 'pass' ? [
+      num('通る幅', () => L.range, (v) => { L.range = v; }, { unit: '°（来る方向を中心）' }),
+      num('始まり', () => L.start, (v) => { L.start = v; }, { unit: 'フレーム', min: 0 }),
+      num('かかる長さ', () => L.duration, (v) => { L.duration = v; }, { unit: 'フレーム', min: 0 })] : []),
+    el('div', { class: 'hint', text: '3D 層と、材質・ベベルを使う塗り・フチで共通です。「光の動き」は光の来る方向を時間で動かし、金属や 3D の面に光が走って見えます。' }));
 }
 
 function makeLayer(type) {
@@ -130,6 +149,7 @@ function makeLayer(type) {
     // Mirrors the Layer defaults in tdp_doc.h.
     case 'extrude': Object.assign(l, { depth: 40, sideColor: '#FF9A9A9A', sideColor2: '#FF3C3C3C', bevel: 'round', bevelWidth: 4, bevelHeight: 4,
       rotX: 0, rotY: 0, perspective: 50, metallic: 0, roughness: 40 }); break;
+    case 'texture': Object.assign(l, { clip: true, tex: makeTexture({ blend: 'screen' }) }); break;
   }
   return l;
 }
@@ -170,6 +190,8 @@ const state = {
   panX: 0, panY: 0, // preview offset from centred, device px
   dirty: false,
   textSel: [0, 0], // last selection in the text box
+  cells: null,     // character cells of the selected text, while the kerning tool is on
+  kernSel: null,   // { id, index }: the gap selected with the kerning tool (index = character before it)
 };
 const history = { stack: [], index: -1, timer: 0 };
 
@@ -227,7 +249,9 @@ function pump() {
     const v = viewRect();
     const w = Math.max(1, Math.min(Math.round(v.w), state.doc.frame.width));
     const h = Math.max(1, Math.round(w * state.doc.frame.height / state.doc.frame.width));
-    post({ type: 'render', purpose: 'preview', seq: ++render.seq, doc: state.doc, frame: state.frame, width: w, height: h });
+    // The kerning tool also needs the character cells of the selected text.
+    post({ type: 'render', purpose: 'preview', seq: ++render.seq, doc: state.doc, frame: state.frame, width: w, height: h,
+      cells: state.tool === 'kern' ? state.sel : -1 });
     return;
   }
   const t = render.thumbs.shift();
@@ -252,6 +276,7 @@ function onFrame(info, buffer) {
       frameCanvas.width = info.width; frameCanvas.height = info.height;
       frameCanvas.getContext('2d').putImageData(img, 0, 0);
       quads = info.quads || [];
+      state.cells = info.cells ? { obj: info.cellsObject, cells: info.cells } : null;
       state.lastMs = info.ms;
       draw();
       updateStatus();
@@ -272,6 +297,13 @@ function onMessage(m) {
     case 'init': init(m); break;
     case 'requestClose': requestClose(); break;
     case 'error': alertDialog(m.message); break;
+    case 'textureInfo': onTextureInfo(m); break;
+    case 'texturePicked': {
+      const cb = texPicks.get(m.id);
+      texPicks.delete(m.id);
+      if (cb && m.path) cb(m.path);
+      break;
+    }
   }
 }
 
@@ -462,6 +494,99 @@ function draw() {
       ctx.stroke();
     }
   }
+  if (state.tool === 'kern') drawKernHandles(v);
+}
+
+// ---- kerning tool: handles between the characters of the selected text
+// Gaps in reading order. index = the character before the gap (what `kerning` is keyed by);
+// line = the cell edge in doc px; dir = unit vector along the line of text (view axes), em = font size there.
+function kernGaps(o) {
+  const c = state.cells && state.cells.obj === state.sel ? state.cells.cells : null;
+  if (!c) return [];
+  const sizes = charStyles(o);
+  const out = [];
+  for (let i = 0; i + 1 < c.length; i++) {
+    const a = c[i], b = c[i + 1];
+    if (b.ch <= a.ch || b.ch - 1 >= o.text.length) continue;
+    if (/[\n\r]/.test(o.text.slice(a.ch, b.ch))) continue;
+    const q = a.q;
+    const line = o.vertical ? [q[6], q[7], q[4], q[5]] : [q[2], q[3], q[4], q[5]];
+    const d = o.vertical ? [q[6] - q[0], q[7] - q[1]] : [q[2] - q[0], q[3] - q[1]];
+    const len = Math.hypot(d[0], d[1]) || 1;
+    out.push({ index: b.ch - 1, line, dir: [d[0] / len, d[1] / len], em: (sizes[a.ch] && sizes[a.ch].size) || o.size,
+      pair: o.text.slice(a.ch, b.ch) + (o.text[b.ch] || '') });
+  }
+  return out;
+}
+
+function drawKernHandles(v) {
+  const o = obj();
+  if (!o) return;
+  const kern = kernArray(o);
+  ctx.save();
+  for (const g of kernGaps(o)) {
+    const [x1, y1] = toView(v, g.line[0], g.line[1]), [x2, y2] = toView(v, g.line[2], g.line[3]);
+    const sel = state.kernSel && state.kernSel.id === o.id && state.kernSel.index === g.index;
+    ctx.strokeStyle = sel ? '#ff9a2d' : kern[g.index] ? 'rgba(120,220,140,0.9)' : 'rgba(80,170,255,0.7)';
+    ctx.lineWidth = (sel ? 3 : 1.5) * devicePixelRatio;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    if (sel) {
+      const value = kern[g.index] || 0;
+      const label = `カーニング ${value >= 0 ? '+' : ''}${Math.round(value / g.em * 1000)}`;
+      ctx.font = `${12 * devicePixelRatio}px "Yu Gothic UI", sans-serif`;
+      const w = ctx.measureText(label).width + 10 * devicePixelRatio;
+      const lx = Math.min(x1, x2) - w / 2 + Math.abs(x2 - x1) / 2, ly = Math.min(y1, y2) - 8 * devicePixelRatio;
+      ctx.fillStyle = 'rgba(0,0,0,0.75)';
+      ctx.fillRect(lx, ly - 15 * devicePixelRatio, w, 18 * devicePixelRatio);
+      ctx.fillStyle = '#ffb35c';
+      ctx.fillText(label, lx + 5 * devicePixelRatio, ly - 1.5 * devicePixelRatio);
+    }
+  }
+  ctx.restore();
+}
+
+// The gap nearest to a point (device px on the canvas), if it is close enough.
+function hitGap(o, px, py) {
+  const v = viewRect();
+  let best = null, bestD = 10 * devicePixelRatio;
+  for (const g of kernGaps(o)) {
+    const [x1, y1] = toView(v, g.line[0], g.line[1]), [x2, y2] = toView(v, g.line[2], g.line[3]);
+    const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy || 1;
+    const t = clamp(((px - x1) * dx + (py - y1) * dy) / l2, 0, 1);
+    const d = Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+    if (d < bestD) { bestD = d; best = g; }
+  }
+  return best;
+}
+
+// Changes the kerning after character `index` by delta px.
+function kernAdjust(o, index, delta) {
+  const kern = kernArray(o);
+  if (index < 0 || index >= kern.length) return;
+  kern[index] = Math.round((kern[index] + delta) * 100) / 100;
+  writeKern(o, kern);
+  changed(false);
+  refreshRange();
+}
+
+// Step of the arrow keys: 20 / 1000 em (Shift 100, Alt 5), like After Effects.
+function kernStep(o, index, e) {
+  const st = charStyles(o)[index];
+  const em = (st && st.size) || o.size;
+  return em * (e.shiftKey ? 0.1 : e.altKey ? 0.005 : 0.02);
+}
+
+// Moves the selected gap to the next / previous one in the text.
+function kernMove(o, dir) {
+  const gaps = kernGaps(o);
+  if (!gaps.length) return;
+  const cur = state.kernSel ? gaps.findIndex((g) => g.index === state.kernSel.index) : -1;
+  const next = clamp(cur < 0 ? (dir > 0 ? 0 : gaps.length - 1) : cur + dir, 0, gaps.length - 1);
+  state.kernSel = { id: o.id, index: gaps[next].index };
+  draw();
 }
 
 function pointInQuad(q, x, y) {
@@ -476,6 +601,7 @@ function pointInQuad(q, x, y) {
 
 let drag = null;
 let pan = null;
+let kernDrag = null;
 function startPan(e) {
   pan = { x: e.clientX, y: e.clientY, px: state.panX, py: state.panY };
   view.setPointerCapture(e.pointerId);
@@ -506,13 +632,26 @@ view.addEventListener('pointerdown', (e) => {
     focusText(true);
     return;
   }
+  if (state.tool === 'kern') {
+    // Click a gap between two characters to select it; drag along the line (or use the arrow keys) to change it.
+    const ko = obj();
+    const g = ko ? hitGap(ko, e.offsetX * devicePixelRatio, e.offsetY * devicePixelRatio) : null;
+    if (g) {
+      state.kernSel = { id: ko.id, index: g.index };
+      kernDrag = { x: e.clientX, y: e.clientY, start: kernArray(ko)[g.index], dir: g.dir, scale: (ko.vertical ? ko.scaleY : ko.scaleX) / 100 || 1 };
+      view.setPointerCapture(e.pointerId);
+      draw();
+      return;
+    }
+    state.kernSel = null;
+  }
   let hit = -1;
   for (let i = state.doc.objects.length - 1; i >= 0; i--) {
     if (state.doc.objects[i].visible !== false && pointInQuad(quads[i], x, y)) { hit = i; break; }
   }
-  if (hit !== state.sel) { selectObject(hit); buildProps(); draw(); }
+  if (hit !== state.sel) { selectObject(hit); buildProps(); if (state.tool === 'kern') requestRender(); draw(); }
   const o = obj();
-  if (o && hit >= 0) {
+  if (o && hit >= 0 && state.tool !== 'kern') {
     drag = { x, y, ox: o.x, oy: o.y, moved: false };
     view.setPointerCapture(e.pointerId);
   } else if (hit < 0 && (state.zoom !== 1 || state.panX || state.panY)) {
@@ -524,6 +663,18 @@ view.addEventListener('pointermove', (e) => {
     state.panX = pan.px + (e.clientX - pan.x) * devicePixelRatio;
     state.panY = pan.py + (e.clientY - pan.y) * devicePixelRatio;
     draw();
+    return;
+  }
+  if (kernDrag) {
+    const ko = obj();
+    if (!ko || !state.kernSel) return;
+    const v = viewRect();
+    const along = ((e.clientX - kernDrag.x) * kernDrag.dir[0] + (e.clientY - kernDrag.y) * kernDrag.dir[1]) * devicePixelRatio;
+    const kern = kernArray(ko);
+    kern[state.kernSel.index] = Math.round((kernDrag.start + along / v.s / kernDrag.scale) * 2) / 2;
+    writeKern(ko, kern);
+    changed(false);
+    refreshRange();
     return;
   }
   if (!drag) return;
@@ -538,8 +689,8 @@ view.addEventListener('pointermove', (e) => {
   syncTransformInputs();
   changed(false);
 });
-view.addEventListener('pointerup', () => { drag = null; pan = null; view.classList.remove('panning'); });
-view.addEventListener('pointercancel', () => { drag = null; pan = null; view.classList.remove('panning'); });
+view.addEventListener('pointerup', () => { drag = null; pan = null; kernDrag = null; view.classList.remove('panning'); });
+view.addEventListener('pointercancel', () => { drag = null; pan = null; kernDrag = null; view.classList.remove('panning'); });
 view.addEventListener('dblclick', () => { if (obj()) focusText(false); });
 view.tabIndex = 0;
 
@@ -548,6 +699,8 @@ function selectObject(i) {
   const o = obj();
   state.layerSel = o && o.stack.length ? (o.stack.find((l) => l.id === state.layerSel) || o.stack[0]).id : null;
   state.textSel = [0, 0];
+  state.kernSel = null;
+  state.cells = null;
 }
 
 function focusText(selectAll) {
@@ -559,9 +712,13 @@ function focusText(selectAll) {
 
 // ------------------------------------------------------------------ toolbar
 function setTool(t) {
+  const was = state.tool;
   state.tool = t;
   document.querySelectorAll('.tool').forEach((b) => b.classList.toggle('active', b.dataset.tool === t));
-  view.style.cursor = t === 'text' ? 'text' : 'default';
+  view.style.cursor = t === 'text' ? 'text' : t === 'kern' ? 'col-resize' : 'default';
+  if (t !== 'kern') { state.kernSel = null; state.cells = null; }
+  if (t === 'kern' || was === 'kern') requestRender(); // the host sends the character cells only for this tool
+  draw();
 }
 document.querySelectorAll('.tool').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
 
@@ -633,11 +790,48 @@ document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.key === '1') { e.preventDefault(); actualSize(); return; }
   if (e.ctrlKey && (e.key === '+' || e.key === '=')) { e.preventDefault(); stepZoom(1.25); return; }
   if (e.ctrlKey && (e.key === '-' || e.key === '_')) { e.preventDefault(); stepZoom(1 / 1.25); return; }
+  // Alt + arrows in the text box change the kerning at the caret (After Effects style; Shift = bigger steps).
+  if (typing && document.activeElement.id === 'textInput' && e.altKey && /^Arrow(Left|Right|Up|Down)$/.test(e.key)) {
+    const o = obj(), ta = document.activeElement, a = ta.selectionStart;
+    e.preventDefault();
+    if (o && a === ta.selectionEnd && a > 0 && a < o.text.length) {
+      const widen = e.key === 'ArrowRight' || e.key === 'ArrowDown';
+      kernAdjust(o, a - 1, (widen ? 1 : -1) * kernStep(o, a - 1, { shiftKey: e.shiftKey, altKey: false }));
+      state.kernSel = { id: o.id, index: a - 1 };
+    }
+    return;
+  }
   if (typing) return;
+  // Kerning tool with a gap selected: arrows widen / narrow it, Ctrl+arrows or Tab move to the next gap.
+  if (state.tool === 'kern' && state.kernSel) {
+    const ko = obj();
+    if (ko && ko.id === state.kernSel.id) {
+      const plus = ko.vertical ? 'ArrowDown' : 'ArrowRight', minus = ko.vertical ? 'ArrowUp' : 'ArrowLeft';
+      if (e.key === plus || e.key === minus) {
+        e.preventDefault();
+        if (e.ctrlKey) kernMove(ko, e.key === plus ? 1 : -1);
+        else kernAdjust(ko, state.kernSel.index, (e.key === plus ? 1 : -1) * kernStep(ko, state.kernSel.index, e));
+        return;
+      }
+      if (e.key === 'Tab') { e.preventDefault(); kernMove(ko, e.shiftKey ? -1 : 1); return; }
+      if (e.key === 'Escape') { state.kernSel = null; draw(); return; }
+      if (e.key === 'Delete' || e.key === 'Backspace') { // back to the font's own spacing
+        e.preventDefault();
+        const kern = kernArray(ko);
+        kern[state.kernSel.index] = 0;
+        writeKern(ko, kern);
+        changed(false);
+        refreshRange();
+        return;
+      }
+      if (e.key.startsWith('Arrow')) { e.preventDefault(); return; }
+    }
+  }
   if (e.ctrlKey && e.key.toLowerCase() === 'd') { e.preventDefault(); $('#btnDupObj').click(); return; }
   if (e.key === ' ') { e.preventDefault(); togglePlay(); return; }
   if (e.key === 'v' || e.key === 'V') setTool('select');
   if (e.key === 't' || e.key === 'T') setTool('text');
+  if (e.key === 'k' || e.key === 'K') setTool('kern');
   if (e.key === 'Delete') deleteObject();
   const o = obj();
   if (o && e.key.startsWith('Arrow')) {
@@ -744,21 +938,104 @@ function check(label, get, set) {
   return row(label, c);
 }
 
-// Paint editor: mutates the paint object in place.
-function paintEditor(paint, onTypeChange) {
+// ------------------------------------------------------------------ textures (images / videos with alpha)
+const texInfo = new Map();   // path -> last "textureInfo" message from the host
+const texPicks = new Map();  // request id -> callback of a file dialog
+const texPoll = new Map();   // path -> timer while a video is being converted
+
+const texLabel = (path) => (path ? path.split(/[\\/]/).pop() : '（未選択）');
+
+function texStatusText(path) {
+  if (!path) return 'PNG・JPG などの画像、MOV・MP4 などの動画（透過動画も可）を選べます。';
+  const i = texInfo.get(path);
+  if (!i) return '確認中…';
+  if (i.error) return i.error;
+  if (i.converting || i.needsConversion) return `動画を変換中… ${i.done || 0} フレーム（初回だけ。ffmpeg を使います）`;
+  if (!i.ok) return '読み込めません';
+  return i.video ? `動画 ${i.width}×${i.height}・${i.frames} フレーム・${(+i.fps).toFixed(2)} fps` : `画像 ${i.width}×${i.height}`;
+}
+
+// prepare: also start the conversion of a video that has none yet.
+function requestTexInfo(path, prepare) {
+  if (path) post({ type: prepare ? 'prepareTexture' : 'textureInfo', path });
+}
+
+function onTextureInfo(m) {
+  const prev = texInfo.get(m.path);
+  texInfo.set(m.path, m);
+  document.querySelectorAll('.texStatus').forEach((e) => {
+    if (e.dataset.path === m.path) { e.textContent = texStatusText(m.path); e.classList.toggle('bad', !!m.error); }
+  });
+  clearTimeout(texPoll.get(m.path));
+  if (m.converting || m.needsConversion) texPoll.set(m.path, setTimeout(() => requestTexInfo(m.path, true), 600));
+  if (!prev || prev.video !== m.video) buildProps(); // video controls appear once we know it is a video
+  if (m.ok && !(prev && prev.ok)) requestRender();    // became ready: show it
+}
+
+function pickTexture(cb) {
+  const id = newId('P');
+  texPicks.set(id, cb);
+  post({ type: 'pickTexture', id });
+}
+
+// Editor of a Texture object (mutated in place). opt.blend / opt.opacity: show those.
+function textureEditor(tex, opt = {}) {
+  const box = el('div', { class: 'paint texBox' });
+  const path = tex.path || '';
+  if (path && !texInfo.has(path)) requestTexInfo(path, true);
+  const info = texInfo.get(path);
+  box.append(row('ファイル', el('span', { class: 'texName', text: texLabel(path), title: path }),
+    el('button', { class: 'small', text: path ? '変更…' : '選ぶ…', onclick: () => pickTexture((p) => { tex.path = p; requestTexInfo(p, true); changed(true); }) }),
+    path ? el('button', { class: 'small', text: '外す', onclick: () => { tex.path = ''; changed(true); } }) : null));
+  box.append(el('div', { class: 'hint texStatus', 'data-path': path, text: texStatusText(path) }));
+  if (!path) return box;
+  box.append(seg('貼る範囲', [['text', 'テキスト（一緒に動く）'], ['frame', '画面全体']], () => tex.area, (v) => { tex.area = v; }));
+  box.append(select('合わせ方', [['cover', '全体を覆う'], ['contain', '全体を収める'], ['stretch', '引き伸ばす'], ['tile', '並べる（タイル）']], () => tex.fit, (v) => { tex.fit = v; }));
+  box.append(num('大きさ', () => tex.scale, (v) => { tex.scale = v; }, { unit: '%', min: 1 }));
+  box.append(num('ずらし X', () => tex.offsetX, (v) => { tex.offsetX = v; }, { unit: 'px' }));
+  box.append(num('ずらし Y', () => tex.offsetY, (v) => { tex.offsetY = v; }, { unit: 'px' }));
+  box.append(num('回転', () => tex.rotation, (v) => { tex.rotation = v; }, { unit: '°', step: 0.5 }));
+  if (opt.blend) box.append(select('合成', BLENDS, () => tex.blend, (v) => { tex.blend = v; }));
+  if (opt.opacity) box.append(num('不透明度', () => tex.opacity, (v) => { tex.opacity = v; }, { unit: '%', min: 0, max: 100 }));
+  if (info && info.video) {
+    box.append(num('再生速度', () => tex.speed, (v) => { tex.speed = v; }, { unit: '%', min: 1 }));
+    box.append(num('開始位置', () => tex.startTime, (v) => { tex.startTime = v; }, { unit: '秒（クリップの頭での位置）', min: 0, step: 0.1 }));
+    box.append(check('繰り返す', () => tex.loop !== false, (v) => { tex.loop = v; }));
+  }
+  return box;
+}
+
+function paintSwatch(p) {
+  if (p.type === 'texture') return p.base ? paintSwatch(p.base) : '#00000000';
+  if (p.type === 'solid') return p.color;
+  return p.stops ? p.stops[0].color : p.color;
+}
+
+// Paint editor: mutates the paint object in place. opt.noTexture: leave out the texture type.
+function paintEditor(paint, onTypeChange, opt = {}) {
   const box = el('div', { class: 'paint' });
   const build = () => {
     box.replaceChildren();
+    const types = [['solid', '単色'], ['linear', '線形グラデーション'], ['radial', '円形グラデーション'], ['stripe', 'ストライプ'], ['dots', 'ドット']];
+    if (!opt.noTexture) types.push(['texture', 'テクスチャ（画像・動画）']);
     const typeSel = el('select', { onchange: () => {
       setPaintType(paint, typeSel.value);
       build();
       changed(false);
       if (onTypeChange) onTypeChange();
-    } }, [['solid', '単色'], ['linear', '線形グラデーション'], ['radial', '円形グラデーション'], ['stripe', 'ストライプ'], ['dots', 'ドット']]
-      .map(([v, t]) => el('option', { value: v, text: t })));
+    } }, types.map(([v, t]) => el('option', { value: v, text: t })));
     typeSel.value = paint.type;
     box.append(row('塗りの種類', typeSel));
-    if (paint.type === 'solid') {
+    if (paint.type === 'texture') {
+      // A base paint (gradient, ...) under the texture, e.g. a gradient with a transparent video over it.
+      box.append(check('下地を敷く', () => !!paint.base, (v) => {
+        if (v) paint.base = paint.base || { type: 'solid', color: '#FFFFFFFF' }; else delete paint.base;
+        build();
+      }));
+      if (paint.base) box.append(paintEditor(paint.base, null, { noTexture: true }));
+      paint.tex = paint.tex || makeTexture({});
+      box.append(textureEditor(paint.tex, { blend: true, opacity: true }));
+    } else if (paint.type === 'solid') {
       box.append(colorRow('色', () => paint.color, (c) => { paint.color = c; }));
     } else if (paint.type === 'linear' || paint.type === 'radial') {
       if (paint.type === 'linear') box.append(num('角度', () => paint.angle ?? 90, (v) => { paint.angle = v; }, { unit: '°' }));
@@ -777,6 +1054,22 @@ function paintEditor(paint, onTypeChange) {
 }
 
 function setPaintType(p, type) {
+  if (type === 'texture') {
+    // The paint so far becomes the base the texture is laid over.
+    if (p.type !== 'texture') {
+      const base = clone(p);
+      delete base.tex; delete base.base;
+      p.base = base;
+      p.tex = p.tex || makeTexture({});
+    }
+    p.type = 'texture';
+    return;
+  }
+  if (p.type === 'texture') { // leaving the texture: back to the base paint
+    const b = p.base;
+    delete p.tex; delete p.base;
+    if (b) Object.assign(p, b);
+  }
   const base = p.color || '#FFFFFFFF';
   p.type = type;
   if ((type === 'linear' || type === 'radial') && !(p.stops && p.stops.length >= 2)) {
@@ -1128,6 +1421,11 @@ function fontSection(o) {
     el('div', { class: 'hint', text: '● はフォントに実在する太さ。それ以外は近い太さで描かれます。' }),
     check('斜体', () => o.italic, (v) => { o.italic = v; }),
     num('字間', () => o.tracking, (v) => { o.tracking = v; }, { unit: 'px', step: 0.5 }),
+    seg('字詰め', [['metrics', 'メトリクス'], ['palt', '詰め（palt）'], ['none', 'なし']], () => o.kernMode || 'metrics', (v) => { o.kernMode = v; }),
+    num('オプティカル調整', () => o.opticalKern || 0, (v) => { o.opticalKern = v; }, { unit: '%（0 = 使わない）', min: 0, max: 200 }),
+    row('', el('button', { class: 'small', text: 'カーニングツール（K）', title: 'プレビュー上で文字の間を選んで ← → で調整', onclick: () => setTool('kern') }),
+      el('button', { class: 'small', text: '手動カーニングを消す', disabled: !(o.kerning || []).length, onclick: () => { o.kerning = []; state.kernSel = null; changed(true); } })),
+    el('div', { class: 'hint', text: 'メトリクス = フォント内蔵のカーニング。詰め（palt）= 和文をプロポーショナルに詰める（対応フォントのみ。游ゴシック・Noto Sans JP など）。オプティカル = 文字の形から隙間を自動で均す（文字種ごと）。手動のカーニングはその上に足されます。手動は「カーニングツール」で文字の間をクリックして ← → か、テキスト欄で Alt + ← →。' }),
     num('行の高さ', () => o.lineHeight, (v) => { o.lineHeight = v; }, { unit: 'px（0 = 自動）', min: 0 }),
     check('グラデーション・模様を1行ごとに', () => o.paintPerLine ?? true, (v) => { o.paintPerLine = v; }),
     num('ルビの大きさ', () => o.rubyScale ?? 50, (v) => { o.rubyScale = v; }, { unit: '%', min: 10, max: 200 }),
@@ -1210,7 +1508,7 @@ function refreshRange() {
     if (has) {
       // Edit a copy, then write it to every character of the range.
       const p = clone(first.paints[l.id]);
-      const ed = paintEditor(p);
+      const ed = paintEditor(p, null, { noTexture: true }); // a texture is laid over the whole layer, not per character
       ed.addEventListener('input', () => setTimeout(() => { update((st) => { st.paints = st.paints || {}; st.paints[l.id] = clone(p); }); changed(false); }));
       ed.addEventListener('change', () => setTimeout(() => { update((st) => { st.paints = st.paints || {}; st.paints[l.id] = clone(p); }); changed(false); }));
       wrap.append(ed);
@@ -1224,7 +1522,7 @@ function stackSection(o) {
   const list = el('div', { class: 'list' });
   let dragIndex = -1;
   o.stack.forEach((l, i) => {
-    const swatchColor = l.type === 'extrude' ? l.sideColor : l.paint ?(l.paint.type === 'solid' ? l.paint.color : (l.paint.stops ? l.paint.stops[0].color : l.paint.color)) : l.color;
+    const swatchColor = l.type === 'extrude' ? l.sideColor : l.type === 'texture' ? '#FFB4B4B4' : l.paint ? paintSwatch(l.paint) : l.color;
     const item = el('div', { class: 'item' + (l.id === state.layerSel ? ' selected' : ''), draggable: 'true',
       onclick: () => { state.layerSel = l.id; buildProps(); } },
       el('span', { class: 'eye' + (l.enabled ? ' on' : ''), text: l.enabled ? '●' : '○', title: '有効 / 無効',
@@ -1258,8 +1556,8 @@ function stackSection(o) {
     if (!addSel.value) return;
     const l = makeLayer(addSel.value);
     let idx = Math.max(0, o.stack.findIndex((x) => x.id === state.layerSel));
-    // 3D extrudes the layers above it: by default it goes right under the last fill / stroke.
-    if (l.type === 'extrude') idx = o.stack.reduce((last, x, i) => (x.type === 'fill' || x.type === 'stroke' ? i : last), -1);
+    // 3D extrudes and a texture overlay covers the layers above it: by default they go right under the last fill / stroke.
+    if (l.type === 'extrude' || l.type === 'texture') idx = o.stack.reduce((last, x, i) => (x.type === 'fill' || x.type === 'stroke' ? i : last), -1);
     o.stack.splice(o.stack.length ? idx + 1 : 0, 0, l);
     state.layerSel = l.id;
     changed(true);
@@ -1278,7 +1576,7 @@ function stackSection(o) {
       changed(true);
     } }));
 
-  const parts = [el('div', { class: 'hint', text: '上ほど手前に描かれます。ドラッグで並べ替え。シャドウ系は、それより上にある層をまとめた形の影になります。3D は、それより上にある塗り・フチの形を押し出し、その見た目を正面に貼ります（3D は 1 つだけ有効）。' }), list, tools];
+  const parts = [el('div', { class: 'hint', text: '上ほど手前に描かれます。ドラッグで並べ替え。シャドウ系は、それより上にある層をまとめた形の影になります。3D は、それより上にある塗り・フチの形を押し出し、その見た目を正面に貼ります（3D は 1 つだけ有効）。テクスチャ（重ね）は、それより上にある層に画像・動画を重ねます。' }), list, tools];
   const l = layerOf(o);
   if (l) parts.push(layerEditor(o, l));
   return section('装飾スタック', 'stack', ...parts);
@@ -1295,6 +1593,12 @@ function layerEditor(o, l) {
   nameInput.addEventListener('change', () => { l.name = nameInput.value || LAYER_LABELS[l.type]; changed(true); });
   const parts = [row('名前', nameInput), num('不透明度', () => l.opacity, (v) => { l.opacity = v; }, { unit: '%', min: 0, max: 100 })];
   switch (l.type) {
+    case 'texture':
+      parts.push(check('文字の形に制限', () => l.clip !== false, (v) => { l.clip = v; }));
+      l.tex = l.tex || makeTexture({ blend: 'screen' });
+      parts.push(textureEditor(l.tex, { blend: true, opacity: true }));
+      parts.push(el('div', { class: 'hint', text: 'それより上にある層（塗り・フチなど）の上に、画像・動画を重ねます。「文字の形に制限」をオフにすると、文字の外にも描きます（粒子や光の素材向け）。透過動画（ProRes 4444 など）はアルファが使えます。' }));
+      break;
     case 'fill':
       parts.push(paintEditor(l.paint));
       parts.push(surfaceEditor(o, l));
@@ -1340,6 +1644,20 @@ function layerEditor(o, l) {
       parts.push(num('X 回転（上下に傾ける）', () => l.rotX, (v) => { l.rotX = v; }, { unit: '°' }));
       parts.push(num('Y 回転（左右に振る）', () => l.rotY, (v) => { l.rotY = v; }, { unit: '°' }));
       parts.push(num('パース', () => l.perspective, (v) => { l.perspective = v; }, { min: 0, max: 100 }));
+      parts.push(el('div', { class: 'animTitle', text: 'ターンテーブル（ずっと回る）' }));
+      parts.push(seg('動き', [['none', 'なし'], ['spin', '回り続ける'], ['sway', 'ゆらゆら揺れる']], () => l.turn || 'none', (v) => { l.turn = v; changed(true); }));
+      if (l.turn === 'spin' || l.turn === 'sway') {
+        parts.push(seg('軸', [[false, '縦軸（左右に回る）'], [true, '横軸（上下に回る）']], () => !!l.turnX, (v) => { l.turnX = v; }));
+        if (l.turn === 'spin') {
+          parts.push(num('回る速さ', () => l.turnSpeed ?? 90, (v) => { l.turnSpeed = v; }, { unit: '°/秒（負で逆回り）' }));
+          parts.push(num('開始の角度', () => l.turnPhase ?? 0, (v) => { l.turnPhase = v; }, { unit: '°' }));
+        } else {
+          parts.push(num('振れ幅', () => l.turnAmount ?? 25, (v) => { l.turnAmount = v; }, { unit: '°（上の向きを中心に左右へ）' }));
+          parts.push(num('1往復の時間', () => l.turnPeriod ?? 3, (v) => { l.turnPeriod = v; }, { unit: '秒', min: 0.1, step: 0.1 }));
+          parts.push(num('位相', () => l.turnPhase ?? 0, (v) => { l.turnPhase = v; }, { unit: '°' }));
+        }
+        parts.push(el('div', { class: 'hint', text: '上の「向き」に、時間に応じた回転を足します（クリップの頭から）。登場・退場の動きとは別に、クリップの間ずっと続きます。' }));
+      }
       parts.push(el('div', { class: 'animTitle', text: '側面の材質' }));
       parts.push(num('金属っぽさ', () => l.metallic, (v) => { l.metallic = v; }, { unit: '%', min: 0, max: 100 }));
       parts.push(num('粗さ', () => l.roughness, (v) => { l.roughness = v; }, { unit: '%（0 = つるつる）', min: 0, max: 100 }));
@@ -1353,12 +1671,16 @@ function layerEditor(o, l) {
 // Mirrors AnimSpec in tdp_doc.h. The motion itself is evaluated natively (tdp_doc.cpp EvalAnim).
 const ANIM_DEFAULTS = { unit: 'char', order: 'forward', ease: 'auto', dir: 'left', duration: 12, stagger: 2, delay: 0, amount: 0, fade: true, seed: 1 };
 const ANIM_TYPES_IN = [['none', 'なし'], ['fade', 'フェード'], ['typewriter', 'タイプライター'], ['pop', 'ポップ（拡大して出る）'],
-  ['zoom', 'ズーム（大きい所から）'], ['drop', '落下・バウンド'], ['rise', '飛び出し（下から）'], ['slide', 'スライド'], ['spin', '回転'], ['flip3d', '3D 回転']];
+  ['zoom', 'ズーム（大きい所から）'], ['drop', '落下・バウンド'], ['rise', '飛び出し（下から）'], ['slide', 'スライド'], ['spin', '回転'], ['flip3d', '3D 回転'],
+  ['flyz', '3D 奥行き（奥から飛んでくる）'], ['hinge', '3D ヒンジ（倒れる・扉が開く）'], ['tumble', '3D 回転（斜めにくるくる）'], ['grow', '3D 押し出しが伸びる']];
 const ANIM_TYPES_OUT = [['none', 'なし'], ['fade', 'フェード'], ['typewriter', 'タイプライター（消していく）'], ['pop', 'ポップ（縮んで消える）'],
-  ['zoom', 'ズーム（大きくなって消える）'], ['drop', '落下（下へ落ちる）'], ['rise', '沈む（下へ）'], ['slide', 'スライド'], ['spin', '回転'], ['flip3d', '3D 回転']];
+  ['zoom', 'ズーム（大きくなって消える）'], ['drop', '落下（下へ落ちる）'], ['rise', '沈む（下へ）'], ['slide', 'スライド'], ['spin', '回転'], ['flip3d', '3D 回転'],
+  ['flyz', '3D 奥行き（奥へ飛んでいく）'], ['hinge', '3D ヒンジ（倒れる・扉が閉じる）'], ['tumble', '3D 回転（斜めにくるくる）'], ['grow', '3D 押し出しが縮む']];
 // [label, unit, type default]
 const ANIM_AMOUNT = { pop: ['開始の大きさ', '%', 0], zoom: ['開始の大きさ', '%', 300], drop: ['高さ', 'px', 160], rise: ['深さ', 'px', 80],
-  slide: ['距離', 'px', 120], spin: ['回転', '°', 360], flip3d: ['回転', '°', 90] };
+  slide: ['距離', 'px', 120], spin: ['回転', '°', 360], flip3d: ['回転', '°', 90], flyz: ['奥行きの距離', 'px', 800], hinge: ['回転', '°', 90],
+  tumble: ['回転', '°', 360] };
+const ANIM_3D = ['flip3d', 'hinge', 'tumble', 'flyz', 'grow'];
 const ANIM_UNITS = [['char', '1文字ずつ'], ['line', '1行ずつ'], ['all', '全体まとめて']];
 const ANIM_ORDERS = [['forward', '先頭から'], ['backward', '末尾から'], ['centerOut', '中央から外へ'], ['edgesIn', '両端から中央へ'], ['random', 'ランダム']];
 const ANIM_EASES = [['auto', '動きに合わせる'], ['linear', '一定'], ['out', 'だんだん遅く'], ['inOut', 'ゆっくり→速く→ゆっくり'],
@@ -1396,14 +1718,19 @@ function animEditor(o, key, out) {
     if (am) parts.push(num(am[0], () => a.amount || am[2], (v) => { a.amount = v; }, { unit: am[1] }));
     if (a.type === 'slide')
       parts.push(seg(out ? '去る方向' : '来る方向', [['left', '左'], ['right', '右'], ['up', '上'], ['down', '下']], () => a.dir, (v) => { a.dir = v; }));
-    if (a.type === 'flip3d') {
+    if (a.type === 'flip3d' || a.type === 'tumble')
       parts.push(seg('回る向き', [['left', '左から'], ['right', '右から'], ['up', '上から'], ['down', '下から']], () => a.dir, (v) => { a.dir = v; }));
-      if (!o.stack.some((l) => l.type === 'extrude' && l.enabled))
-        parts.push(el('div', { class: 'hint', text: '装飾スタックに 3D 層が無いので、横（縦）に縮める表現になります。' }));
-    }
+    if (a.type === 'flyz')
+      parts.push(seg('来る方向', [['left', '奥から'], ['right', '手前から']], () => a.dir, (v) => { a.dir = v; }));
+    if (a.type === 'hinge')
+      parts.push(seg('軸にする辺', [['left', '左端'], ['right', '右端'], ['up', '上端'], ['down', '下端（ドミノ）']], () => a.dir, (v) => { a.dir = v; }));
+    if (ANIM_3D.includes(a.type) && !o.stack.some((l) => l.type === 'extrude' && l.enabled))
+      parts.push(el('div', { class: 'hint', text: a.type === 'grow'
+        ? '装飾スタックに 3D 層が無いので、何も起きません。'
+        : '装飾スタックに 3D 層が無いので、縮めたり大きさを変えたりする疑似表現になります。' }));
     if (a.type !== 'typewriter' && a.type !== 'fade') {
       parts.push(select('動きのカーブ', ANIM_EASES, () => a.ease, (v) => { a.ease = v; }));
-      parts.push(check('一緒にフェード', () => a.fade, (v) => { a.fade = v; }));
+      if (a.type !== 'grow') parts.push(check('一緒にフェード', () => a.fade, (v) => { a.fade = v; }));
     }
     const span = animSpan(o, a);
     const dur = state.doc.frame.durationFrames;
@@ -1548,7 +1875,8 @@ function thumbDocForStyle(p) {
   const wide = st.stack.some((l) => l.type === 'background');
   return { format: 'NAKA-TDP', version: 2, frame: { width: 560, height: 240, vidScale: 30, vidSampleSize: 1, durationFrames: 1 },
     objects: [{ type: 'text', id: 'thumb', text: 'あア亜Ab', x: 280, y: 120, align: 'center', valign: 'middle', size: wide ? 72 : 104,
-      family: st.family, weight: st.weight, italic: st.italic, tracking: st.tracking || 0, spans: [], kerning: [], stack: st.stack }] };
+      family: st.family, weight: st.weight, italic: st.italic, tracking: st.tracking || 0, spans: [], kerning: [], stack: st.stack,
+      light: Object.assign({}, LIGHT_DEFAULTS, st.light) }] };
 }
 function thumbDocForTitle(p) {
   // Thumbnails show the title at rest.
@@ -1715,7 +2043,7 @@ function buildPresets() {
   list.replaceChildren();
   if (!state.presets) return;
   buildFolderBar();
-  $('#keepFontBox').hidden = state.presetTab !== 'style';
+  $('#keepFontBox').hidden = $('#keepLightBox').hidden = state.presetTab !== 'style';
   const sel = state.folderSel[state.presetTab];
   const items = presetItems().filter((p) => sel === '*' || (sel === '' ? !p.folder : p.folder === sel));
   if (!items.length) {
@@ -1754,6 +2082,10 @@ function buildPresets() {
 const keepFont = $('#chkKeepFont');
 try { keepFont.checked = localStorage.getItem('keepFont') === '1'; } catch { /* ignore */ }
 keepFont.onchange = () => { try { localStorage.setItem('keepFont', keepFont.checked ? '1' : '0'); } catch { /* ignore */ } };
+// Keep the text's own light (direction, height, strength, ambient, reflections) when applying a style.
+const keepLight = $('#chkKeepLight');
+try { keepLight.checked = localStorage.getItem('keepLight') === '1'; } catch { /* ignore */ }
+keepLight.onchange = () => { try { localStorage.setItem('keepLight', keepLight.checked ? '1' : '0'); } catch { /* ignore */ } };
 
 async function applyPreset(p) {
   if (p.style) {
@@ -1761,6 +2093,8 @@ async function applyPreset(p) {
     if (!o) { alertDialog('スタイルを適用するテキストを選択してください。'); return; }
     const st = clone(p.style);
     if (!keepFont.checked) { o.family = st.family; o.weight = st.weight; o.italic = !!st.italic; o.tracking = st.tracking || 0; }
+    // Styles saved before the light was part of them have none: the text keeps its own light then.
+    if (st.light && !keepLight.checked) o.light = Object.assign({}, LIGHT_DEFAULTS, st.light);
     o.stack = st.stack;
     state.layerSel = o.stack[0] ? o.stack[0].id : null;
     changed(true);
@@ -1787,7 +2121,8 @@ $('#btnSavePreset').onclick = async () => {
     if (!o) { alertDialog('保存するテキストを選択してください。'); return; }
     const name = await promptDialog('スタイル名', o.text.split('\n')[0].slice(0, 16));
     if (!name) return;
-    p = { id: newId('S'), name, style: { family: o.family, weight: o.weight, italic: o.italic, tracking: o.tracking, stack: clone(o.stack) } };
+    p = { id: newId('S'), name, style: { family: o.family, weight: o.weight, italic: o.italic, tracking: o.tracking, stack: clone(o.stack),
+      light: Object.assign({}, LIGHT_DEFAULTS, o.light) } };
     state.presets.styles.push(p);
   } else {
     const name = await promptDialog('テンプレート名', obj() ? obj().text.split('\n')[0].slice(0, 16) : 'テロップ');

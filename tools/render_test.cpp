@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include "tdp_doc.h"
+#include "tdp_media.h"
 #include "tdp_render.h"
 
 #include <cstdio>
@@ -11,8 +12,16 @@
 
 int wmain(int argc, wchar_t** argv)
 {
+	// tdp_render_test --prepare <texture file>: makes the frame cache of a video (what the designer does
+	// when a texture is chosen) and prints what it found.
+	if (argc >= 3 && wcscmp(argv[1], L"--prepare") == 0) {
+		const tdp::media::Info info = tdp::media::Prepare(argv[2], [](int n) { wprintf(L"\r%d frames", n); });
+		wprintf(L"\n%s: %s %dx%d, %d frames, %.3f fps %s\n", argv[2], info.ok ? L"ok" : L"NOT READY", info.w, info.h, info.frames, info.fps,
+			info.error.c_str());
+		return info.ok ? 0 : 1;
+	}
 	if (argc < 3) {
-		fwprintf(stderr, L"usage: tdp_render_test <in.tdp> <out.bmp> [frame] [width]\n");
+		fwprintf(stderr, L"usage: tdp_render_test <in.tdp> <out.bmp> [frame] [width]\n       tdp_render_test --prepare <texture file>\n");
 		return 2;
 	}
 	tdp::Doc doc;

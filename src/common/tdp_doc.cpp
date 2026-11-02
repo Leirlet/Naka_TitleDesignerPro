@@ -14,8 +14,14 @@ using json::Value;
 
 namespace {
 
-const char* kPaintTypes[] = { "solid", "linear", "radial", "stripe", "dots" };
-const char* kLayerTypes[] = { "fill", "stroke", "shadow", "innerShadow", "longShadow", "background", "extrude" };
+const char* kPaintTypes[] = { "solid", "linear", "radial", "stripe", "dots", "texture" };
+const char* kLayerTypes[] = { "fill", "stroke", "shadow", "innerShadow", "longShadow", "background", "extrude", "texture" };
+const char* kTurnModes[] = { "none", "spin", "sway" };
+const char* kLightMotions[] = { "none", "orbit", "sweep", "pass" };
+const char* kKernModes[] = { "metrics", "none", "palt" };
+const char* kTexFits[] = { "cover", "contain", "stretch", "tile" };
+const char* kTexAreas[] = { "text", "frame" };
+const char* kTexBlends[] = { "normal", "multiply", "screen", "overlay", "add", "lighten", "darken", "softLight" };
 const char* kStrokePositions[] = { "outer", "center", "inner" };
 const char* kJoins[] = { "miter", "round", "bevel" };
 const char* kBevels[] = { "none", "flat", "round", "cove" };
@@ -51,11 +57,12 @@ const wchar_t* LayerDefaultName(LayerType t)
 	case LayerType::LongShadow: return L"ロングシャドウ";
 	case LayerType::Background: return L"背景";
 	case LayerType::Extrude: return L"3D";
+	case LayerType::Texture: return L"テクスチャ";
 	}
 	return L"";
 }
 
-const char* kAnimTypes[] = { "none", "fade", "typewriter", "pop", "zoom", "drop", "rise", "slide", "spin", "flip3d" };
+const char* kAnimTypes[] = { "none", "fade", "typewriter", "pop", "zoom", "drop", "rise", "slide", "spin", "flip3d", "flyz", "hinge", "tumble", "grow" };
 const char* kAnimUnits[] = { "char", "line", "all" };
 const char* kAnimOrders[] = { "forward", "backward", "centerOut", "edgesIn", "random" };
 const char* kAnimEases[] = { "auto", "linear", "out", "inOut", "back", "bounce", "elastic" };
@@ -191,6 +198,9 @@ Layer MakeLayer(LayerType type)
 		break;
 	case LayerType::Extrude:
 		break; // defaults in Layer
+	case LayerType::Texture:
+		l.tex.blend = TexBlend::Screen; // particles / light: the usual use of an overlay
+		break;
 	}
 	return l;
 }
@@ -282,6 +292,9 @@ float DefaultAmount(AnimType t)
 	case AnimType::Slide: return 120;  // px
 	case AnimType::Spin: return 360;   // degrees
 	case AnimType::Flip3D: return 90;  // degrees
+	case AnimType::FlyZ: return 800;   // px behind / in front
+	case AnimType::Hinge: return 90;   // degrees
+	case AnimType::Tumble: return 360; // degrees
 	default: return 0;
 	}
 }
@@ -367,6 +380,31 @@ void ApplyMotion(const AnimSpec& a, float raw, bool out, UnitState& s)
 		else s.rotX += d;
 		break;
 	}
+	case AnimType::FlyZ: {
+		const float d = amount * (1 - p);
+		s.dz += a.dir == AnimDir::Right ? -d : d;
+		break;
+	}
+	case AnimType::Hinge: {
+		// Turns around the edge named by dir; positive rotX moves the bottom away, positive rotY the right side.
+		const float d = amount * (1 - p);
+		if (a.dir == AnimDir::Left) { s.rotY += d; s.px = -0.5f; }
+		else if (a.dir == AnimDir::Right) { s.rotY -= d; s.px = 0.5f; }
+		else if (a.dir == AnimDir::Up) { s.rotX += d; s.py = -0.5f; }
+		else { s.rotX -= d; s.py = 0.5f; }
+		break;
+	}
+	case AnimType::Tumble: {
+		const float d = amount * (1 - p);
+		const float sy = (a.dir == AnimDir::Left || a.dir == AnimDir::Up) ? 1.0f : -1.0f;
+		const float sx = (a.dir == AnimDir::Left || a.dir == AnimDir::Down) ? 1.0f : -1.0f;
+		s.rotY += sy * d;
+		s.rotX += sx * d * 0.6f;
+		break;
+	}
+	case AnimType::Grow:
+		s.depth *= p;
+		return; // the extrusion grows in place: no fade
 	default: break;
 	}
 	// Fade with the motion, but faster than it so overshoot / bounce happen fully visible.
@@ -395,7 +433,57 @@ int Extrude3DIndex(const TextObject& obj)
 bool HasSurface(const Layer& l)
 {
 	if (l.type != LayerType::Fill && l.type != LayerType::Stroke) return false;
-	return l.material == Material::Lit || (l.bevel != BevelShape::None && l.bevelWidth > 0 && l.bevelHeight > 0);
+	return l.material == Material::Lit || (l.bevel != BevelShape::None && l.bevelWidth > 0 && l.bevelHeight > 0)
+		|| (!l.bump.path.empty() && l.bumpDepth != 0);
+}
+
+Light AnimatedLight(const Light& l, int frame, float fps)
+{
+	Light out = l;
+	const float t = fps > 0 ? (float)frame / fps : 0.0f; // seconds
+	const float period = std::max(l.period, 0.05f);
+	switch (l.motion) {
+	case LightMotion::Orbit:
+		out.angle = l.angle + 360.0f * t / period;
+		break;
+	case LightMotion::Sweep:
+		out.angle = l.angle + l.range * 0.5f * std::sin(2 * kPiF * t / period);
+		break;
+	case LightMotion::Pass: {
+		const float u = Clamp01(l.duration > 0 ? ((float)frame - l.start) / l.duration : ((float)frame >= l.start ? 1.0f : 0.0f));
+		const float e = u * u * (3 - 2 * u); // smooth in and out
+		out.angle = l.angle - l.range * 0.5f + l.range * e;
+		break;
+	}
+	case LightMotion::None:
+		break;
+	}
+	return out;
+}
+
+void TurnOf(const Layer& l, int frame, float fps, float& dRotX, float& dRotY)
+{
+	dRotX = dRotY = 0;
+	if (l.turn == TurnMode::None) return;
+	const float t = fps > 0 ? (float)frame / fps : 0.0f;
+	float a;
+	if (l.turn == TurnMode::Spin) a = l.turnPhase + l.turnSpeed * t;
+	else a = l.turnAmount * std::sin(2 * kPiF * t / std::max(l.turnPeriod, 0.05f) + l.turnPhase * kPiF / 180.0f);
+	(l.turnX ? dRotX : dRotY) = a;
+}
+
+int TextureFrameIndex(const Texture& t, int frame, float fps, int count, double texFps)
+{
+	if (count <= 1) return 0;
+	const double sec = (double)t.startTime + (fps > 0 ? frame / (double)fps : 0.0) * t.speed / 100.0;
+	long long i = (long long)std::floor(sec * (texFps > 0 ? texFps : 30.0));
+	if (t.loop) {
+		i %= count;
+		if (i < 0) i += count;
+	} else {
+		i = std::clamp<long long>(i, 0, count - 1);
+	}
+	return (int)i;
 }
 
 std::vector<std::pair<int, int>> TcyRanges(const TextObject& obj)
@@ -472,11 +560,51 @@ UnitState EvalAnim(const AnimSpec& a, bool out, int index, int count, int frame,
 }
 
 // ---------------------------------------------------------------- JSON
+Value TextureToJson(const Texture& t)
+{
+	Value v = Value::Object();
+	v.set("path", t.path);
+	v.set("area", EnumName(t.area, kTexAreas));
+	v.set("fit", EnumName(t.fit, kTexFits));
+	v.set("scale", t.scale);
+	v.set("offsetX", t.offsetX);
+	v.set("offsetY", t.offsetY);
+	v.set("rotation", t.rotation);
+	v.set("blend", EnumName(t.blend, kTexBlends));
+	v.set("opacity", t.opacity);
+	v.set("speed", t.speed);
+	v.set("startTime", t.startTime);
+	v.set("loop", t.loop);
+	return v;
+}
+
+Texture TextureFromJson(const Value& v)
+{
+	Texture t;
+	t.path = v["path"].asWString(L"");
+	t.area = EnumFrom(v["area"], kTexAreas, t.area);
+	t.fit = EnumFrom(v["fit"], kTexFits, t.fit);
+	t.scale = std::max(F(v, "scale", t.scale), 1.0f);
+	t.offsetX = F(v, "offsetX", t.offsetX);
+	t.offsetY = F(v, "offsetY", t.offsetY);
+	t.rotation = F(v, "rotation", t.rotation);
+	t.blend = EnumFrom(v["blend"], kTexBlends, t.blend);
+	t.opacity = std::clamp(F(v, "opacity", t.opacity), 0.0f, 100.0f);
+	t.speed = F(v, "speed", t.speed);
+	t.startTime = F(v, "startTime", t.startTime);
+	t.loop = v["loop"].asBool(t.loop);
+	return t;
+}
+
 Value PaintToJson(const Paint& p)
 {
 	Value v = Value::Object();
 	v.set("type", EnumName(p.type, kPaintTypes));
 	switch (p.type) {
+	case PaintType::Texture:
+		v.set("tex", TextureToJson(p.tex));
+		if (p.base) v.set("base", PaintToJson(*p.base));
+		break;
 	case PaintType::Solid:
 		v.set("color", ColorToString(p.color));
 		break;
@@ -518,6 +646,11 @@ Paint PaintFromJson(const Value& v)
 		p.stops.push_back({ F(s, "pos", 0), ColorFromString(s["color"].asString(), 0xFFFFFFFF) });
 	if ((p.type == PaintType::Linear || p.type == PaintType::Radial) && p.stops.size() < 2)
 		p.stops = { { 0, 0xFFFFFFFF }, { 1, 0xFF000000 } };
+	if (p.type == PaintType::Texture) {
+		p.tex = TextureFromJson(v["tex"]);
+		// The base is any other paint; a texture on a texture would only nest.
+		if (v.has("base") && v["base"]["type"].asString() != "texture") p.base = std::make_shared<const Paint>(PaintFromJson(v["base"]));
+	}
 	return p;
 }
 
@@ -537,8 +670,16 @@ Value LayerToJson(const Layer& l)
 		v.set("bevel", EnumName(l.bevel, kBevels));
 		v.set("bevelWidth", l.bevelWidth);
 		v.set("bevelHeight", l.bevelHeight);
+		if (!l.bump.path.empty()) {
+			v.set("bump", TextureToJson(l.bump));
+			v.set("bumpDepth", l.bumpDepth);
+		}
 	}
 	switch (l.type) {
+	case LayerType::Texture:
+		v.set("tex", TextureToJson(l.tex));
+		v.set("clip", l.clip);
+		break;
 	case LayerType::Fill:
 		v.set("paint", PaintToJson(l.paint));
 		break;
@@ -580,6 +721,14 @@ Value LayerToJson(const Layer& l)
 		v.set("perspective", l.perspective);
 		v.set("metallic", l.metallic);
 		v.set("roughness", l.roughness);
+		if (l.turn != TurnMode::None) {
+			v.set("turn", EnumName(l.turn, kTurnModes));
+			v.set("turnX", l.turnX);
+			v.set("turnSpeed", l.turnSpeed);
+			v.set("turnAmount", l.turnAmount);
+			v.set("turnPeriod", l.turnPeriod);
+			v.set("turnPhase", l.turnPhase);
+		}
 		break;
 	}
 	return v;
@@ -619,6 +768,16 @@ Layer LayerFromJson(const Value& v)
 	l.metallic = F(v, "metallic", l.metallic);
 	l.roughness = F(v, "roughness", l.roughness);
 	l.brushed = v["brushed"].asBool(l.brushed);
+	if (v.has("bump")) l.bump = TextureFromJson(v["bump"]);
+	l.bumpDepth = F(v, "bumpDepth", l.bumpDepth);
+	if (v.has("tex")) l.tex = TextureFromJson(v["tex"]);
+	l.clip = v["clip"].asBool(l.clip);
+	l.turn = EnumFrom(v["turn"], kTurnModes, l.turn);
+	l.turnX = v["turnX"].asBool(l.turnX);
+	l.turnSpeed = F(v, "turnSpeed", l.turnSpeed);
+	l.turnAmount = F(v, "turnAmount", l.turnAmount);
+	l.turnPeriod = std::max(F(v, "turnPeriod", l.turnPeriod), 0.05f);
+	l.turnPhase = F(v, "turnPhase", l.turnPhase);
 	return l;
 }
 
@@ -717,6 +876,8 @@ Value TextObjectToJson(const TextObject& t)
 		kern.push(kv);
 	}
 	v.set("kerning", kern);
+	v.set("kernMode", EnumName(t.kernMode, kKernModes));
+	v.set("opticalKern", t.opticalKern);
 
 	Value stack = Value::Array();
 	for (const Layer& l : t.stack) stack.push(LayerToJson(l));
@@ -727,6 +888,13 @@ Value TextObjectToJson(const TextObject& t)
 	light.set("intensity", t.light.intensity);
 	light.set("ambient", t.light.ambient);
 	light.set("env", EnumName(t.light.env, kEnvStyles));
+	if (t.light.motion != LightMotion::None) {
+		light.set("motion", EnumName(t.light.motion, kLightMotions));
+		light.set("range", t.light.range);
+		light.set("period", t.light.period);
+		light.set("start", t.light.start);
+		light.set("duration", t.light.duration);
+	}
 	v.set("light", light);
 	v.set("animIn", AnimToJson(t.animIn));
 	v.set("animOut", AnimToJson(t.animOut));
@@ -776,6 +944,8 @@ TextObject TextObjectFromJson(const Value& v)
 	}
 	for (const auto& kv : v["kerning"].items())
 		t.kerning.push_back({ kv["index"].asInt(0), F(kv, "value", 0) });
+	t.kernMode = EnumFrom(v["kernMode"], kKernModes, t.kernMode);
+	t.opticalKern = std::clamp(F(v, "opticalKern", 0), 0.0f, 200.0f);
 	for (const auto& lv : v["stack"].items()) t.stack.push_back(LayerFromJson(lv));
 	// The first Phase 3 files kept the light in the 3D layer.
 	Value light = v["light"];
@@ -794,6 +964,11 @@ TextObject TextObjectFromJson(const Value& v)
 	t.light.intensity = F(light, "intensity", t.light.intensity);
 	t.light.ambient = F(light, "ambient", t.light.ambient);
 	t.light.env = EnumFrom(light["env"], kEnvStyles, t.light.env);
+	t.light.motion = EnumFrom(light["motion"], kLightMotions, t.light.motion);
+	t.light.range = F(light, "range", t.light.range);
+	t.light.period = std::max(F(light, "period", t.light.period), 0.05f);
+	t.light.start = F(light, "start", t.light.start);
+	t.light.duration = F(light, "duration", t.light.duration);
 	if (v.has("animIn")) t.animIn = AnimFromJson(v["animIn"]);
 	else t.animIn = FadeInAnim(v["fadeInFrames"].asInt(0)); // early Phase 1 files
 	t.animOut = AnimFromJson(v["animOut"]);

@@ -13,12 +13,14 @@ cbuffer Surface : register(b0)
 	float4 mat;     // metallic, roughness, brushed, lit (1) / flat colour (0)
 	float4 jump;    // jump flood step px; blur direction (yz)
 	float4 rot[3];  // turn of the 3D layer behind this one (rows), identity in 2D
+	float4 bump;    // bump height px for white, bump map present (1)
 };
 
 float3 Turn(float3 n) { return normalize(float3(dot(rot[0].xyz, n), dot(rot[1].xyz, n), dot(rot[2].xyz, n))); }
 
 Texture2D colorTex : register(t0);  // the layer, premultiplied
 Texture2D seedTex : register(t1);   // nearest outside pixel (xy), x < -1e4 = none yet
+Texture2D bumpTex : register(t2);   // bump map (premultiplied texture drawn in output pixels), when bump.y > 0
 
 float4 VSFull(uint id : SV_VertexID) : SV_Position
 {
@@ -80,6 +82,13 @@ float Hash(float2 p)
 
 float HeightAt(float2 p) { return seedTex.Load(int3(p, 0)).x; } // the height pass output is bound as t1
 
+// Brightness of the bump map (transparent = dark).
+float BumpAt(float2 p)
+{
+	const float3 c = bumpTex.Load(int3(clamp(p, float2(0, 0), view.xy - 1), 0)).rgb;
+	return dot(c, float3(0.299, 0.587, 0.114));
+}
+
 float4 PSShade(float4 pos : SV_Position) : SV_Target
 {
 	const float2 p = pos.xy;
@@ -95,6 +104,13 @@ float4 PSShade(float4 pos : SV_Position) : SV_Target
 		const float g = HeightAt(p + float2(-1, 1)), h = HeightAt(p + float2(0, 1)), i = HeightAt(p + float2(1, 1));
 		hx = ((cc + 2 * f + i) - (a + 2 * d + g)) / 8;
 		hy = ((g + 2 * h + i) - (a + 2 * b + cc)) / 8;
+	}
+	if (bump.y > 0.5) {
+		const float a = BumpAt(p + float2(-1, -1)), b = BumpAt(p + float2(0, -1)), cc = BumpAt(p + float2(1, -1));
+		const float d = BumpAt(p + float2(-1, 0)), f = BumpAt(p + float2(1, 0));
+		const float g = BumpAt(p + float2(-1, 1)), h = BumpAt(p + float2(0, 1)), i = BumpAt(p + float2(1, 1));
+		hx += bump.x * ((cc + 2 * f + i) - (a + 2 * d + g)) / 8;
+		hy += bump.x * ((g + 2 * h + i) - (a + 2 * b + cc)) / 8;
 	}
 	const float3 N = Turn(float3(-hx, -hy, -1));
 	const float3 N0 = Turn(float3(0, 0, -1));

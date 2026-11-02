@@ -1,4 +1,5 @@
 #include "tdp_render.h"
+#include "tdp_media.h"
 
 #include <windows.h>
 #include <d2d1_1.h>
@@ -80,6 +81,8 @@ struct Run {
 	// 3D turn of the unit (degrees) around pivot (layout space, after m); drawn by the 3D layer.
 	float rotX = 0, rotY = 0;
 	D2D1_POINT_2F pivot{};
+	float dz = 0;                   // doc px away from the viewer (fly in / out), drawn by the 3D layer
+	float depth = 1;                // growth of the 3D extrusion (0 = flat)
 };
 
 // IDWriteTextRenderer1 so that vertical text arrives with its glyph orientation.
@@ -475,6 +478,32 @@ public:
 		return true;
 	}
 
+	bool Cells(const Doc& doc, size_t index, std::vector<CharCell>& out)
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		if (!dc_ && !Init()) return false;
+		if (index >= doc.objects.size()) return false;
+		TextShape shape;
+		if (FAILED(BuildShape(doc.objects[index], 1.0f, shape))) return false;
+		const D2D1::Matrix3x2F m = *D2D1::Matrix3x2F::ReinterpretBaseType(&shape.toOutput);
+		out.clear();
+		for (const Run& r : shape.runs) {
+			if (r.ruby) continue;
+			CharCell c;
+			c.ch = r.ch;
+			const D2D1_POINT_2F corners[4] = { { r.cell.left, r.cell.top }, { r.cell.right, r.cell.top },
+				{ r.cell.right, r.cell.bottom }, { r.cell.left, r.cell.bottom } };
+			for (int i = 0; i < 4; ++i) {
+				const D2D1_POINT_2F p = m.TransformPoint(corners[i]);
+				c.quad[i * 2] = p.x;
+				c.quad[i * 2 + 1] = p.y;
+			}
+			out.push_back(c);
+		}
+		std::sort(out.begin(), out.end(), [](const CharCell& a, const CharCell& b) { return a.ch < b.ch; });
+		return true;
+	}
+
 	std::wstring Description()
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
@@ -523,6 +552,7 @@ private:
 
 	void Reset()
 	{
+		texCache_.clear();
 		Reset3D();
 		for (auto& b : slots_) b.Reset();
 		for (auto& t : slotTex_) t.Reset();
@@ -608,6 +638,18 @@ private:
 	// frame < 0: no animation (selection outline etc.)
 	HRESULT BuildShape(const TextObject& obj, float outScale, TextShape& shape, int frame = -1, int durationFrames = 0)
 	{
+		// Optical kerning: the extra spacing is worked out from the outlines, then laid out like manual kerning.
+		if (obj.opticalKern > 0 && obj.text.size() > 1) {
+			std::vector<float> opt;
+			if (SUCCEEDED(OpticalOffsets(obj, opt))) {
+				TextObject adjusted = obj;
+				adjusted.opticalKern = 0;
+				bool any = false;
+				for (size_t i = 0; i < opt.size(); ++i)
+					if (std::fabs(opt[i]) > 0.01f) { adjusted.kerning.push_back({ (int)i, opt[i] }); any = true; }
+				if (any) return BuildShape(adjusted, outScale, shape, frame, durationFrames);
+			}
+		}
 		const UINT32 len = (UINT32)obj.text.size();
 		ComPtr<IDWriteTextFormat> format;
 		HRESULT hr = dwrite_->CreateTextFormat(obj.family.c_str(), nullptr, (DWRITE_FONT_WEIGHT)std::clamp(obj.weight, 1, 999),
@@ -637,6 +679,23 @@ private:
 			tag->Release();
 		}
 
+		// Font features: proportional metrics (palt / vpal) for tight Japanese, or the kerning pairs off.
+		if (obj.kernMode != KernMode::Metrics && len > 0) {
+			ComPtr<IDWriteTypography> typo;
+			if (SUCCEEDED(dwrite_->CreateTypography(&typo))) {
+				// Setting a typography replaces the default features: the kerning pairs have to be asked for again.
+				const bool palt = obj.kernMode == KernMode::Palt;
+				const DWRITE_FONT_FEATURE kern{ DWRITE_FONT_FEATURE_TAG_KERNING, palt ? 1u : 0u };
+				typo->AddFontFeature(kern);
+				if (palt) {
+					const DWRITE_FONT_FEATURE prop{ obj.vertical ? (DWRITE_FONT_FEATURE_TAG)DWRITE_MAKE_OPENTYPE_TAG('v', 'p', 'a', 'l')
+						: (DWRITE_FONT_FEATURE_TAG)DWRITE_MAKE_OPENTYPE_TAG('p', 'a', 'l', 't'), 1u };
+					typo->AddFontFeature(prop);
+				}
+				layout->SetTypography(typo.Get(), { 0, len });
+			}
+		}
+
 		std::vector<TcyGroup> tcy;
 		hr = MeasureTcy(obj, tcy);
 		if (FAILED(hr)) return hr;
@@ -647,13 +706,13 @@ private:
 			std::vector<float> trailing(len, obj.tracking);
 			for (const Span& s : obj.spans)
 				for (int c = std::max(s.start, 0); c < s.start + s.length && c < (int)len; ++c) trailing[c] += s.tracking;
-			for (const auto& k : obj.kerning)
-				if (k.first >= 0 && k.first < (int)len) trailing[k.first] += k.second;
 			// Tate-chu-yoko: the sideways characters of a group take exactly one em along the column.
 			for (const TcyGroup& g : tcy) {
 				for (int c = g.start; c < g.start + g.length - 1; ++c) trailing[c] = 0;
 				trailing[g.start + g.length - 1] = g.em - g.width;
 			}
+			for (const auto& k : obj.kerning)
+				if (k.first >= 0 && k.first < (int)len) trailing[k.first] += k.second;
 			UINT32 start = 0;
 			for (UINT32 c = 1; c <= len; ++c) {
 				if (c == len || trailing[c] != trailing[start]) {
@@ -916,6 +975,138 @@ private:
 		return S_OK;
 	}
 
+	// ------------------------------------------------------------ optical kerning
+	// Ink extent of one glyph along the reading direction, sampled in bands across it.
+	static constexpr int kRows = 24;
+	struct Profile {
+		bool ink = false;
+		float lo[kRows], hi[kRows]; // extent per band (u = along the line); lo > hi = no ink in the band
+		float bboxLo = 1e30f, bboxHi = -1e30f;
+	};
+
+	static HRESULT MakeProfile(ID2D1Geometry* g, const D2D1_RECT_F& cell, bool vertical, Profile& p)
+	{
+		PolySink polys;
+		HRESULT hr = g->Simplify(D2D1_GEOMETRY_SIMPLIFICATION_OPTION_LINES, nullptr, 0.1f, &polys);
+		if (FAILED(hr)) return hr;
+		const float v0 = vertical ? cell.left : cell.top, v1 = vertical ? cell.right : cell.bottom;
+		const float step = (v1 - v0) / kRows;
+		for (int k = 0; k < kRows; ++k) { p.lo[k] = 1e30f; p.hi[k] = -1e30f; }
+		for (const Poly& f : polys.figures) {
+			const size_t n = f.size();
+			for (size_t i = 0; i < n; ++i) {
+				const D2D1_POINT_2F a = f[i], b = f[(i + 1) % n];
+				const float au = vertical ? a.y : a.x, av = vertical ? a.x : a.y;
+				const float bu = vertical ? b.y : b.x, bv = vertical ? b.x : b.y;
+				p.bboxLo = std::min(p.bboxLo, au);
+				p.bboxHi = std::max(p.bboxHi, au);
+				if (av == bv || step <= 0) continue;
+				for (int k = 0; k < kRows; ++k) {
+					const float vk = v0 + (k + 0.5f) * step;
+					if ((vk - av) * (vk - bv) > 0) continue;
+					const float u = au + (vk - av) / (bv - av) * (bu - au);
+					p.lo[k] = std::min(p.lo[k], u);
+					p.hi[k] = std::max(p.hi[k], u);
+				}
+			}
+		}
+		p.ink = p.bboxLo < p.bboxHi;
+		return S_OK;
+	}
+
+	// Extra spacing after each character (UTF-16 index) that evens out the visible gaps between
+	// neighbouring glyphs: the gap of a pair is the average clearance between the two outlines over
+	// the height of the line; pairs wider than the text's average close up, tighter ones open.
+	HRESULT OpticalOffsets(const TextObject& obj, std::vector<float>& out)
+	{
+		const int len = (int)obj.text.size();
+		out.assign(len, 0.0f);
+
+		std::wstring key = obj.text + L"|" + obj.family + L"|" + obj.tcyChars;
+		wchar_t buf[160];
+		swprintf_s(buf, L"|%g|%d|%d|%g|%g|%d|%d|%g|%d", obj.size, obj.weight, obj.italic ? 1 : 0, obj.tracking, obj.lineHeight,
+			obj.vertical ? 1 : 0, (int)obj.kernMode, obj.opticalKern, obj.tcyDigits);
+		key += buf;
+		for (const Span& s : obj.spans) {
+			swprintf_s(buf, L"|s%d,%d,%g,%d,%g,%d,", s.start, s.length, s.size, s.weight, s.tracking, s.tcy ? 1 : 0);
+			key += buf + s.family;
+		}
+		for (const auto& k : obj.kerning) {
+			swprintf_s(buf, L"|k%d,%g", k.first, k.second);
+			key += buf;
+		}
+		for (const auto& c : opticalCache_)
+			if (c.first == key) { out = c.second; return S_OK; }
+
+		TextObject plain = obj;
+		plain.opticalKern = 0;
+		TextShape sh;
+		HRESULT hr = BuildShape(plain, 1.0f, sh);
+		if (FAILED(hr)) return hr;
+
+		struct Item { int ch; Profile p; };
+		std::vector<Item> items;
+		for (const Run& r : sh.runs) {
+			if (r.ruby || !r.geometry) continue;
+			Item it;
+			it.ch = r.ch;
+			hr = MakeProfile(r.geometry.Get(), r.cell, obj.vertical, it.p);
+			if (FAILED(hr)) return hr;
+			items.push_back(std::move(it));
+		}
+		std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.ch < b.ch; });
+		auto emAt = [&](int ch) {
+			float s = obj.size;
+			for (const Span& sp : obj.spans)
+				if (ch >= sp.start && ch < sp.start + sp.length && sp.size > 0) s = sp.size;
+			return std::max(s, 1.0f);
+		};
+
+		// Pairs are only compared with pairs of the same kinds of characters (CJK next to CJK, Latin next
+		// to Latin, ...): the usual gap of kana would otherwise open up every tight Latin pair.
+		auto kind = [&](int ch) { return ch >= 0 && ch < len && (unsigned)obj.text[ch] >= 0x2E80 ? 1 : 0; };
+		struct Pair { int index; float gap, em; int group; };
+		std::vector<Pair> pairs;
+		for (size_t i = 0; i + 1 < items.size(); ++i) {
+			const Item& a = items[i], & b = items[i + 1];
+			if (!a.p.ink || !b.p.ink || b.ch <= a.ch) continue;
+			bool lineBreak = false;
+			for (int c = a.ch; c < b.ch && c < len; ++c)
+				if (obj.text[c] == L'\n' || obj.text[c] == L'\r') lineBreak = true;
+			if (lineBreak) continue;
+			const float em = emAt(a.ch);
+			float sum = 0;
+			int rows = 0;
+			for (int k = 0; k < kRows; ++k) {
+				const bool ha = a.p.lo[k] <= a.p.hi[k], hb = b.p.lo[k] <= b.p.hi[k];
+				if (!ha && !hb) continue;
+				float c;
+				if (ha && hb) c = b.p.lo[k] - a.p.hi[k];
+				else if (ha) c = b.p.bboxLo - a.p.hi[k];
+				else c = b.p.lo[k] - a.p.bboxHi;
+				sum += std::clamp(c, -0.3f * em, 0.5f * em);
+				++rows;
+			}
+			if (rows == 0) continue;
+			pairs.push_back({ b.ch - 1, sum / rows, em, kind(a.ch) * 2 + kind(b.ch) });
+		}
+		const float strength = obj.opticalKern / 100.0f;
+		for (int group = 0; group < 4; ++group) {
+			float mean = 0;
+			int count = 0;
+			for (const Pair& p : pairs)
+				if (p.group == group) { mean += p.gap; ++count; }
+			if (count < 2) continue;
+			mean /= count;
+			for (const Pair& p : pairs)
+				if (p.group == group && p.index >= 0 && p.index < len)
+					out[p.index] += std::clamp((mean - p.gap) * strength, -0.25f * p.em, 0.25f * p.em);
+		}
+		if (opticalCache_.size() >= 8) opticalCache_.erase(opticalCache_.begin());
+		opticalCache_.push_back({ key, out });
+		return S_OK;
+	}
+
 	HRESULT MakeUnion(TextShape& shape)
 	{
 		std::vector<ID2D1Geometry*> raw;
@@ -1024,8 +1215,13 @@ private:
 			return std::fabs(c) < 0.001f ? (c < 0 ? -0.001f : 0.001f) : c;
 		};
 		auto motion = [&](const UnitState& s, const D2D1_RECT_F& b) {
-			const float cx = (b.left + b.right) * 0.5f, cy = (b.top + b.bottom) * 0.5f;
-			const float k = std::max(s.scale, 0.001f); // keep the matrix invertible
+			// Pivot: the unit's centre, or one of its edges (hinge).
+			const float cx = (b.left + b.right) * 0.5f + s.px * (b.right - b.left), cy = (b.top + b.bottom) * 0.5f + s.py * (b.bottom - b.top);
+			float k = std::max(s.scale, 0.001f); // keep the matrix invertible
+			if (!real3D && s.dz != 0) { // without a 3D layer, depth only shows as the perspective size
+				const float D = docW_ * 1.39f;
+				k *= D / std::max(D + s.dz, D * 0.05f);
+			}
 			const float kx = real3D ? k : k * squash(s.rotY), ky = real3D ? k : k * squash(s.rotX);
 			return D2D1::Matrix3x2F::Translation(-cx, -cy) * D2D1::Matrix3x2F::Scale(kx, ky)
 				* D2D1::Matrix3x2F::Rotation(s.rotation) * D2D1::Matrix3x2F::Translation(cx + s.dx, cy + s.dy);
@@ -1048,8 +1244,14 @@ private:
 			r.opacity = std::clamp(si.opacity * so.opacity, 0.0f, 1.0f);
 			r.rotX = si.rotX + so.rotX;
 			r.rotY = si.rotY + so.rotY;
-			const D2D1_RECT_F& pb = obj.animIn.type == AnimType::Flip3D ? ui.bounds[ui.unitOfRun[i]] : uo.bounds[uo.unitOfRun[i]];
-			r.pivot = m.TransformPoint(D2D1::Point2F((pb.left + pb.right) * 0.5f, (pb.top + pb.bottom) * 0.5f));
+			r.dz = si.dz + so.dz;
+			r.depth = si.depth * so.depth;
+			// The 3D turn pivots around the centre (or hinge edge) of the unit of the animation that turns.
+			const bool inTurns = obj.animIn.type == AnimType::Flip3D || obj.animIn.type == AnimType::Hinge || obj.animIn.type == AnimType::Tumble;
+			const D2D1_RECT_F& pb = inTurns ? ui.bounds[ui.unitOfRun[i]] : uo.bounds[uo.unitOfRun[i]];
+			const UnitState& ps = inTurns ? si : so;
+			r.pivot = m.TransformPoint(D2D1::Point2F((pb.left + pb.right) * 0.5f + ps.px * (pb.right - pb.left),
+				(pb.top + pb.bottom) * 0.5f + ps.py * (pb.bottom - pb.top)));
 			if (!m.IsIdentity()) {
 				ComPtr<ID2D1TransformedGeometry> t;
 				HRESULT hr = factory_->CreateTransformedGeometry(r.geometry.Get(), m, &t);
@@ -1091,6 +1293,14 @@ private:
 		case PaintType::Solid: {
 			ComPtr<ID2D1SolidColorBrush> b;
 			hr = dc_->CreateSolidColorBrush(ToColor(p.color), &b);
+			out = b;
+			return hr;
+		}
+		case PaintType::Texture: {
+			// The texture itself is laid over the layer afterwards (LayTexture); this is what is underneath.
+			if (p.base) return MakeBrush(*p.base, bounds, deviceScale, out);
+			ComPtr<ID2D1SolidColorBrush> b;
+			hr = dc_->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0, 0), &b);
 			out = b;
 			return hr;
 		}
@@ -1162,7 +1372,8 @@ private:
 	}
 
 	// Draws a vector layer (fill / stroke / background) into the current target with the layout transform set.
-	HRESULT DrawVectorLayer(const TextObject& obj, const Layer& l, const TextShape& shape)
+	// forced: draw everything with this brush instead of the layer's paints (the layer's coverage as a mask).
+	HRESULT DrawVectorLayer(const TextObject& obj, const Layer& l, const TextShape& shape, ID2D1Brush* forced = nullptr)
 	{
 		HRESULT hr = S_OK;
 		const D2D1::Matrix3x2F layout = *D2D1::Matrix3x2F::ReinterpretBaseType(&shape.toOutput);
@@ -1174,6 +1385,7 @@ private:
 			ComPtr<ID2D1Brush> brush;
 			hr = MakeBrush(l.paint, r, shape.deviceScale, brush);
 			if (FAILED(hr)) return hr;
+			if (forced) brush = forced;
 			dc_->SetTransform(*D2D1::Matrix3x2F::ReinterpretBaseType(&shape.bgM) * layout);
 			dc_->FillRoundedRectangle(D2D1::RoundedRect(r, l.radius, l.radius), brush.Get());
 			dc_->SetTransform(layout);
@@ -1186,6 +1398,7 @@ private:
 				ComPtr<ID2D1Brush> brush;
 				hr = MakeBrush(PaintFor(obj, l, run.span), run.paintBox, shape.deviceScale, brush);
 				if (FAILED(hr)) break;
+				if (forced) brush = forced;
 				place(run);
 				dc_->FillGeometry(run.geometry.Get(), brush.Get());
 			}
@@ -1204,6 +1417,7 @@ private:
 			ComPtr<ID2D1Brush> brush;
 			hr = MakeBrush(PaintFor(obj, l, run.span), Inflate(run.paintBox, grow, grow), shape.deviceScale, brush);
 			if (FAILED(hr)) break;
+			if (forced) brush = forced;
 			const float strokeWidth = l.position == StrokePosition::Center ? l.width : l.width * 2.0f;
 			place(run);
 			dc_->DrawGeometry(run.geometry.Get(), brush.Get(), strokeWidth, style.Get());
@@ -1268,6 +1482,19 @@ private:
 			HRESULT hr = DrawVectorLayer(obj, l, shape);
 			dc_->PopLayer();
 			dc_->SetTransform(D2D1::IdentityMatrix());
+			if (SUCCEEDED(hr) && l.paint.type == PaintType::Texture && !l.paint.tex.path.empty()) {
+				// The texture goes over what the base paint drew, inside the layer's own shape.
+				ComPtr<ID2D1SolidColorBrush> white;
+				hr = dc_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &white);
+				if (SUCCEEDED(hr)) {
+					Target(kA, true);
+					dc_->SetTransform(layout);
+					hr = DrawVectorLayer(obj, l, shape, white.Get());
+					dc_->SetTransform(D2D1::IdentityMatrix());
+				}
+				if (SUCCEEDED(hr))
+					hr = LayTexture(l.paint.tex, shape, kTmp, kA, std::clamp(l.opacity / 100.0f, 0.0f, 1.0f) * l.paint.tex.opacity / 100.0f);
+			}
 			return hr;
 		}
 		case LayerType::Shadow: {
@@ -1338,6 +1565,141 @@ private:
 
 	static D2D1_POINT_2F Origin() { return D2D1::Point2F(0, 0); }
 
+	// ------------------------------------------------------------ textures
+	struct TexSlot {
+		std::wstring key;
+		ComPtr<ID2D1Bitmap> bitmap;
+		int w = 0, h = 0;
+	};
+
+	// Bitmap of the texture's frame at the current frame; false (nothing to draw) if it is not ready.
+	bool TextureBitmap(const Texture& t, ComPtr<ID2D1Bitmap>& bitmap, int& w, int& h)
+	{
+		if (t.path.empty()) return false;
+		const media::Info info = media::Lookup(t.path);
+		if (!info.ok) {
+			if (info.video && info.error.empty() && !info.converting) media::Request(t.path); // convert it in the background
+			return false;
+		}
+		const int index = TextureFrameIndex(t, curFrame_, curFps_, info.frames, info.fps);
+		const std::wstring key = info.id + L"#" + std::to_wstring(index);
+		for (const TexSlot& s : texCache_)
+			if (s.key == key) { bitmap = s.bitmap; w = s.w; h = s.h; return true; }
+		const std::shared_ptr<const media::Frame> f = media::GetFrame(t.path, index);
+		if (!f) return false;
+		ComPtr<ID2D1Bitmap> b;
+		if (FAILED(dc_->CreateBitmap(D2D1::SizeU((UINT32)f->w, (UINT32)f->h), f->bgra.data(), (UINT32)f->w * 4,
+			D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)), &b)))
+			return false;
+		if (texCache_.size() >= 8) texCache_.erase(texCache_.begin());
+		texCache_.push_back({ key, b, f->w, f->h });
+		bitmap = b;
+		w = f->w;
+		h = f->h;
+		return true;
+	}
+
+	// Draws the texture, fitted and placed as it asks, into the current target (identity transform).
+	// S_FALSE = nothing drawn (the file is not ready or unreadable).
+	HRESULT DrawTextureFill(const Texture& t, const TextShape& shape)
+	{
+		ComPtr<ID2D1Bitmap> bitmap;
+		int tw = 0, th = 0;
+		if (!TextureBitmap(t, bitmap, tw, th)) return S_FALSE;
+		D2D1_RECT_F box;
+		D2D1::Matrix3x2F base;
+		if (t.area == TexArea::Text) {
+			box = shape.ink;
+			base = *D2D1::Matrix3x2F::ReinterpretBaseType(&shape.toOutput);
+		} else {
+			box = D2D1::RectF(0, 0, (float)docW_, (float)docH_);
+			base = D2D1::Matrix3x2F::Scale(outScale_, outScale_);
+		}
+		const float bw = std::max(box.right - box.left, 1.0f), bh = std::max(box.bottom - box.top, 1.0f);
+		float sx = 1, sy = 1;
+		switch (t.fit) {
+		case TexFit::Cover: sx = sy = std::max(bw / tw, bh / th); break;
+		case TexFit::Contain: sx = sy = std::min(bw / tw, bh / th); break;
+		case TexFit::Stretch: sx = bw / tw; sy = bh / th; break;
+		case TexFit::Tile: break;
+		}
+		const float k = std::max(t.scale, 1.0f) / 100.0f;
+		sx *= k;
+		sy *= k;
+		const float cx = (box.left + box.right) * 0.5f + t.offsetX, cy = (box.top + box.bottom) * 0.5f + t.offsetY;
+		const D2D1::Matrix3x2F m = D2D1::Matrix3x2F::Translation(-tw * 0.5f, -th * 0.5f) * D2D1::Matrix3x2F::Scale(sx, sy)
+			* D2D1::Matrix3x2F::Rotation(t.rotation) * D2D1::Matrix3x2F::Translation(cx, cy) * base;
+		if (t.fit == TexFit::Contain) {
+			dc_->SetTransform(m);
+			dc_->DrawBitmap(bitmap.Get(), D2D1::RectF(0, 0, (float)tw, (float)th), 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+			dc_->SetTransform(D2D1::IdentityMatrix());
+			return S_OK;
+		}
+		// Cover / stretch: mirrored beyond the edges so that turning or moving never shows a gap.
+		const D2D1_EXTEND_MODE ext = t.fit == TexFit::Tile ? D2D1_EXTEND_MODE_WRAP : D2D1_EXTEND_MODE_MIRROR;
+		ComPtr<ID2D1BitmapBrush> brush;
+		HRESULT hr = dc_->CreateBitmapBrush(bitmap.Get(), D2D1::BitmapBrushProperties(ext, ext, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR), &brush);
+		if (FAILED(hr)) return hr;
+		brush->SetTransform(m);
+		dc_->FillRectangle(D2D1::RectF(0, 0, (float)targetW_, (float)targetH_), brush.Get());
+		return S_OK;
+	}
+
+	static D2D1_BLEND_MODE BlendMode(TexBlend b)
+	{
+		switch (b) {
+		case TexBlend::Multiply: return D2D1_BLEND_MODE_MULTIPLY;
+		case TexBlend::Screen: return D2D1_BLEND_MODE_SCREEN;
+		case TexBlend::Overlay: return D2D1_BLEND_MODE_OVERLAY;
+		case TexBlend::Add: return D2D1_BLEND_MODE_LINEAR_DODGE;
+		case TexBlend::Lighten: return D2D1_BLEND_MODE_LIGHTEN;
+		case TexBlend::Darken: return D2D1_BLEND_MODE_DARKEN;
+		case TexBlend::SoftLight: return D2D1_BLEND_MODE_SOFT_LIGHT;
+		default: return D2D1_BLEND_MODE_MULTIPLY;
+		}
+	}
+
+	// Lays the texture over slot `dst`, blended, where slot `mask` has alpha (mask < 0: everywhere).
+	// Uses kA / kB / kC as scratch, so `mask` may be `dst` or kA but not kB / kC.
+	HRESULT LayTexture(const Texture& t, const TextShape& shape, int dst, int mask, float opacity)
+	{
+		if (opacity <= 0) return S_OK;
+		Target(kB, true);
+		dc_->SetTransform(D2D1::IdentityMatrix());
+		HRESULT hr = DrawTextureFill(t, shape);
+		if (hr != S_OK) return SUCCEEDED(hr) ? S_OK : hr; // nothing to draw yet
+		if (mask >= 0) dc_->DrawImage(Slot(mask), Origin(), D2D1_INTERPOLATION_MODE_LINEAR, D2D1_COMPOSITE_MODE_DESTINATION_IN);
+
+		const D2D1_LAYER_PARAMETERS1 fade = D2D1::LayerParameters1(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+			D2D1::IdentityMatrix(), std::clamp(opacity, 0.0f, 1.0f));
+		if (t.blend == TexBlend::Normal) {
+			Target(dst, false);
+			dc_->PushLayer(fade, nullptr);
+			dc_->DrawImage(Slot(kB));
+			dc_->PopLayer();
+			return S_OK;
+		}
+		int src = kB;
+		if (opacity < 0.999f) {
+			Target(kC, true);
+			dc_->PushLayer(fade, nullptr);
+			dc_->DrawImage(Slot(kB));
+			dc_->PopLayer();
+			src = kC;
+		}
+		ComPtr<ID2D1Effect> blend;
+		hr = dc_->CreateEffect(CLSID_D2D1Blend, &blend);
+		if (FAILED(hr)) return hr;
+		blend->SetInput(0, Slot(dst));
+		blend->SetInput(1, Slot(src));
+		blend->SetValue(D2D1_BLEND_PROP_MODE, BlendMode(t.blend));
+		Target(kA, true);
+		dc_->DrawImage(blend.Get());
+		Target(dst, true);
+		dc_->DrawImage(Slot(kA));
+		return S_OK;
+	}
+
 	// ------------------------------------------------------------ surface pass (fill / stroke bevel and material)
 	struct SurfaceConstants {
 		float view[4];   // output width, height, camera distance, surroundings
@@ -1347,6 +1709,7 @@ private:
 		float mat[4];    // metallic, roughness, brushed, lit
 		float jump[4];   // jump flood step px
 		float rot[3][4]; // turn of the 3D layer behind (front face normal), rows
+		float bump[4];   // bump height px for white, bump map present
 	};
 
 	void ResetSeeds()
@@ -1376,14 +1739,15 @@ private:
 		return S_OK;
 	}
 
-	// Full-frame pass: ps reads srv0 / srv1, writes rtv.
-	void FullPass(ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv, ID3D11ShaderResourceView* srv0, ID3D11ShaderResourceView* srv1)
+	// Full-frame pass: ps reads srv0 / srv1 / srv2, writes rtv.
+	void FullPass(ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv, ID3D11ShaderResourceView* srv0, ID3D11ShaderResourceView* srv1,
+		ID3D11ShaderResourceView* srv2 = nullptr)
 	{
-		ID3D11ShaderResourceView* none[2] = { nullptr, nullptr };
-		context_->PSSetShaderResources(0, 2, none); // the target may have been bound as input before
+		ID3D11ShaderResourceView* none[3] = { nullptr, nullptr, nullptr };
+		context_->PSSetShaderResources(0, 3, none); // the target may have been bound as input before
 		context_->OMSetRenderTargets(1, &rtv, nullptr);
-		ID3D11ShaderResourceView* srvs[2] = { srv0, srv1 };
-		context_->PSSetShaderResources(0, 2, srvs);
+		ID3D11ShaderResourceView* srvs[3] = { srv0, srv1, srv2 };
+		context_->PSSetShaderResources(0, 3, srvs);
 		context_->PSSetShader(ps, nullptr, 0);
 		context_->Draw(3, 0);
 	}
@@ -1399,27 +1763,38 @@ private:
 		const bool bevel = l.bevel != BevelShape::None && l.bevelWidth > 0 && l.bevelHeight > 0;
 		const float widthPx = std::max(l.bevelWidth * ds, 0.5f);
 		const float D = W * 1.39f;
-		const float4v ld = LightVector(obj.light);
+		const float4v ld = LightVector(curLight_);
+
+		// Bump: the texture drawn into kC as a height map (its brightness) in output pixels.
+		bool bump = false;
+		if (!l.bump.path.empty() && l.bumpDepth != 0) {
+			Target(kC, true);
+			dc_->SetTransform(D2D1::IdentityMatrix());
+			bump = DrawTextureFill(l.bump, shape) == S_OK;
+		}
 		SurfaceConstants c = {
-			{ W, H, D, obj.light.env == EnvStyle::Studio ? 1.0f : 0.0f },
+			{ W, H, D, curLight_.env == EnvStyle::Studio ? 1.0f : 0.0f },
 			{ widthPx, l.bevelHeight * ds, bevel ? (float)(int)l.bevel : 0.0f, 0.5f * std::clamp(l.opacity / 100.0f, 0.02f, 1.0f) },
 			{ ld.v[0], ld.v[1], ld.v[2], ld.v[3] },
-			{ W * 0.5f, H * 0.5f, -D, std::max(obj.light.ambient, 0.0f) / 100.0f },
+			{ W * 0.5f, H * 0.5f, -D, std::max(curLight_.ambient, 0.0f) / 100.0f },
 			{ std::clamp(l.metallic / 100.0f, 0.0f, 1.0f), std::clamp(l.roughness / 100.0f, 0.0f, 1.0f), l.brushed ? 1.0f : 0.0f,
 				l.material == Material::Lit ? 1.0f : 0.0f },
 			{ 1, 0, 0, 0 },
 			{ { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 } },
+			{ l.bumpDepth * ds, bump ? 1.0f : 0.0f, 0, 0 },
 		};
 		// In front of a 3D layer this layer becomes its front face: light it turned like the object.
 		const int extrude = Extrude3DIndex(obj);
 		if (extrude >= 0 && &l < &obj.stack[extrude]) {
 			const Layer& x = obj.stack[extrude];
-			const M3 r = M3::RotY(x.rotY) * M3::RotX(x.rotX);
+			float turnX = 0, turnY = 0;
+			TurnOf(x, curFrame_, curFps_, turnX, turnY);
+			const M3 r = M3::RotY(x.rotY + turnY) * M3::RotX(x.rotX + turnX);
 			for (int i = 0; i < 3; ++i)
 				for (int j = 0; j < 3; ++j) c.rot[i][j] = r.m[i][j];
 		}
 
-		// Direct2D has queued work on kTmp: finish it before Direct3D reads it.
+		// Direct2D has queued work on kTmp (and kC): finish it before Direct3D reads it.
 		Target(kB, false);
 		hr = dc_->Flush();
 		if (FAILED(hr)) return hr;
@@ -1461,9 +1836,9 @@ private:
 				seed = 1 - seed;
 			}
 		}
-		FullPass(psShade_.Get(), slotRtv_[kA].Get(), slotSrv_[kTmp].Get(), seedSrv_[seed].Get());
-		ID3D11ShaderResourceView* none[2] = { nullptr, nullptr };
-		context_->PSSetShaderResources(0, 2, none);
+		FullPass(psShade_.Get(), slotRtv_[kA].Get(), slotSrv_[kTmp].Get(), seedSrv_[seed].Get(), bump ? slotSrv_[kC].Get() : nullptr);
+		ID3D11ShaderResourceView* none[3] = { nullptr, nullptr, nullptr };
+		context_->PSSetShaderResources(0, 3, none);
 		context_->OMSetRenderTargets(0, nullptr, nullptr);
 
 		Target(kTmp, true);
@@ -1719,7 +2094,9 @@ private:
 		const std::vector<BevelStep> prof = BevelProfile(l, depth, bevelW, bevelH);
 		const D2D1_MATRIX_3X2_F& A = shape.toOutput;
 		const float W = (float)targetW_, H = (float)targetH_;
-		const M3 objRot = M3::RotY(l.rotY) * M3::RotX(l.rotX);
+		float turnX = 0, turnY = 0;
+		TurnOf(l, curFrame_, curFps_, turnX, turnY);
+		const M3 objRot = M3::RotY(l.rotY + turnY) * M3::RotX(l.rotX + turnX);
 		const float objPivotZ = depth * ds * 0.5f;
 
 		// The mesh at rest only depends on the object and the output scale: cache it across frames.
@@ -1732,6 +2109,9 @@ private:
 			const Layer defaults;
 			Layer& x = k.stack[index];
 			x.rotX = x.rotY = 0;
+			x.turn = TurnMode::None;
+			x.turnX = defaults.turnX; x.turnSpeed = defaults.turnSpeed; x.turnAmount = defaults.turnAmount;
+			x.turnPeriod = defaults.turnPeriod; x.turnPhase = defaults.turnPhase;
 			x.perspective = defaults.perspective;
 			x.metallic = defaults.metallic; x.roughness = defaults.roughness;
 			for (int i = 0; i < index; ++i) { // only stroke widths / joins shape the outline
@@ -1740,6 +2120,8 @@ private:
 				f.material = Material::None;
 				f.bevel = BevelShape::None;
 				f.metallic = defaults.metallic; f.roughness = defaults.roughness; f.brushed = false;
+				f.bump = Texture();
+				f.tex = Texture();
 			}
 			k.light = Light();
 			x.sideColor = defaults.sideColor; x.sideColor2 = defaults.sideColor2;
@@ -1782,8 +2164,12 @@ private:
 			const float pz = depth * k * 0.5f;
 			const M3 lin = objRot * M3::From2D(A, ds) * unitRot * M3::From2D(m, k);
 			const M3 nrm = lin.NormalMatrix();
+			const float growK = run.depth;
+			const float dzOut = run.dz * ds;
 			for (Vertex3D v : local) {
-				float x = v.x * m._11 + v.y * m._21 + m._31, y = v.x * m._12 + v.y * m._22 + m._32, z = v.z * k;
+				// The extrusion grows from the bevel's back edge: the front face and the bevel stay.
+				const float vz = (growK != 1.0f && v.z > bevelH) ? bevelH + (v.z - bevelH) * growK : v.z;
+				float x = v.x * m._11 + v.y * m._21 + m._31, y = v.x * m._12 + v.y * m._22 + m._32, z = vz * k;
 				// The front face shows the flat 2D render at the same (unturned) spot.
 				v.u = (x * A._11 + y * A._21 + A._31) / W;
 				v.v = (x * A._12 + y * A._22 + A._32) / H;
@@ -1793,7 +2179,7 @@ private:
 				const float ox = x * A._11 + y * A._21 + A._31, oy = x * A._12 + y * A._22 + A._32;
 				x = ox - shape.anchorOut.x; y = oy - shape.anchorOut.y; z = z * ds - objPivotZ;
 				objRot.Apply(x, y, z);
-				v.x = x + shape.anchorOut.x; v.y = y + shape.anchorOut.y; v.z = z + objPivotZ;
+				v.x = x + shape.anchorOut.x; v.y = y + shape.anchorOut.y; v.z = z + objPivotZ + dzOut;
 				nrm.Apply(v.nx, v.ny, v.nz);
 				verts.push_back(v);
 			}
@@ -1838,13 +2224,13 @@ private:
 		context_->Unmap(vb3d_.Get(), 0);
 
 		auto lin = [](uint32_t argb, int shift) { return std::pow(((argb >> shift) & 0xFF) / 255.0f, 2.2f); };
-		const float4v ld = LightVector(obj.light);
+		const float4v ld = LightVector(curLight_);
 		const float zDen = 1.0f / wMin - 1.0f / wMax;
 		SceneConstants c = {
-			{ W, H, D, obj.light.env == EnvStyle::Studio ? 1.0f : 0.0f },
+			{ W, H, D, curLight_.env == EnvStyle::Studio ? 1.0f : 0.0f },
 			{ 1.0f / (wMin * zDen), -1.0f / zDen, 0, 0 },
 			{ ld.v[0], ld.v[1], ld.v[2], ld.v[3] },
-			{ W * 0.5f, H * 0.5f, -D, std::max(obj.light.ambient, 0.0f) / 100.0f },
+			{ W * 0.5f, H * 0.5f, -D, std::max(curLight_.ambient, 0.0f) / 100.0f },
 			{ lin(l.sideColor, 16), lin(l.sideColor, 8), lin(l.sideColor, 0), std::clamp(l.metallic / 100.0f, 0.0f, 1.0f) },
 			{ lin(l.sideColor2, 16), lin(l.sideColor2, 8), lin(l.sideColor2, 0), std::clamp(l.roughness / 100.0f, 0.0f, 1.0f) },
 		};
@@ -1897,6 +2283,7 @@ private:
 	{
 		const float opacity = ObjectOpacity(obj);
 		if (!obj.visible || opacity <= 0.0f) return S_OK;
+		curLight_ = AnimatedLight(obj.light, frame, curFps_);
 
 		TextShape shape;
 		HRESULT hr = BuildShape(obj, outScale, shape, frame, durationFrames);
@@ -1944,6 +2331,12 @@ private:
 				dc_->DrawImage(Slot(kTmp));
 				continue;
 			}
+			if (l.type == LayerType::Texture) {
+				// Laid over what is in front of it, in place (not behind, like the other layers).
+				hr = LayTexture(l.tex, shape, kAccum, l.clip ? kAccum : -1, std::clamp(l.opacity / 100.0f, 0.0f, 1.0f) * l.tex.opacity / 100.0f);
+				if (FAILED(hr)) return hr;
+				continue;
+			}
 			hr = RenderLayer(obj, l, shape);
 			if (FAILED(hr)) return hr;
 			if (HasSurface(l)) {
@@ -1970,6 +2363,11 @@ private:
 		if (FAILED(hr)) return hr;
 
 		const float outScale = (float)outW / (float)doc.width;
+		outScale_ = outScale;
+		docW_ = doc.width;
+		docH_ = doc.height;
+		curFrame_ = frame;
+		curFps_ = (float)doc.vidScale / (float)std::max(doc.vidSampleSize, 1);
 		dc_->BeginDraw();
 		dc_->SetTransform(D2D1::IdentityMatrix());
 		Target(kFrame, true);
@@ -2043,6 +2441,14 @@ private:
 		std::vector<RunMesh> runs;
 	};
 	std::vector<MeshCache> meshCache_; // oldest first
+	std::vector<std::pair<std::wstring, std::vector<float>>> opticalCache_; // optical kerning, oldest first
+	std::vector<TexSlot> texCache_;    // texture frames as Direct2D bitmaps, oldest first
+	// state of the frame being rendered
+	Light curLight_;
+	int curFrame_ = 0;
+	float curFps_ = 30;
+	int docW_ = 1920, docH_ = 1080;
+	float outScale_ = 1;
 	bool ready3D_ = false, failed3D_ = false;
 	UINT samples3d_ = 1;
 	ComPtr<ID3D11VertexShader> vs3d_;
@@ -2071,6 +2477,11 @@ bool RenderFrame(const Doc& doc, int frame, int outW, int outH, uint8_t* dst, in
 bool GetObjectQuad(const Doc& doc, size_t objectIndex, float outQuad[8])
 {
 	return Engine::Get().Quad(doc, objectIndex, outQuad);
+}
+
+bool GetObjectCells(const Doc& doc, size_t objectIndex, std::vector<CharCell>& out)
+{
+	return Engine::Get().Cells(doc, objectIndex, out);
 }
 
 std::wstring RendererDescription()
