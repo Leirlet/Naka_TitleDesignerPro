@@ -686,6 +686,15 @@ Value LayerToJson(const Layer& l)
 		v.set("bevel", EnumName(l.bevel, kBevels));
 		v.set("bevelWidth", l.bevelWidth);
 		v.set("bevelHeight", l.bevelHeight);
+		v.set("bevelSoften", l.bevelSoften);
+		v.set("bevelDown", l.bevelDown);
+		v.set("hiColor", ColorToString(l.hiColor));
+		v.set("hiAmount", l.hiAmount);
+		v.set("shColor", ColorToString(l.shColor));
+		v.set("shAmount", l.shAmount);
+		v.set("ownLight", l.ownLight);
+		v.set("lightAngle", l.lightAngle);
+		v.set("lightHeight", l.lightHeight);
 		if (!l.bump.path.empty()) {
 			v.set("bump", TextureToJson(l.bump));
 			v.set("bumpDepth", l.bumpDepth);
@@ -785,6 +794,15 @@ Layer LayerFromJson(const Value& v)
 	l.metallic = F(v, "metallic", l.metallic);
 	l.roughness = F(v, "roughness", l.roughness);
 	l.brushed = v["brushed"].asBool(l.brushed);
+	l.bevelSoften = std::clamp(F(v, "bevelSoften", 0), 0.0f, 8.0f);
+	l.bevelDown = v["bevelDown"].asBool(false);
+	l.hiColor = ColorFromString(v["hiColor"].asString(), l.hiColor);
+	l.hiAmount = std::clamp(F(v, "hiAmount", 0), 0.0f, 100.0f);
+	l.shColor = ColorFromString(v["shColor"].asString(), l.shColor);
+	l.shAmount = std::clamp(F(v, "shAmount", 0), 0.0f, 100.0f);
+	l.ownLight = v["ownLight"].asBool(false);
+	l.lightAngle = F(v, "lightAngle", l.lightAngle);
+	l.lightHeight = std::clamp(F(v, "lightHeight", l.lightHeight), 0.0f, 90.0f);
 	if (v.has("bump")) l.bump = TextureFromJson(v["bump"]);
 	l.bumpDepth = F(v, "bumpDepth", l.bumpDepth);
 	if (v.has("tex")) l.tex = TextureFromJson(v["tex"]);

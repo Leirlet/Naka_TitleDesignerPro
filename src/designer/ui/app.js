@@ -49,7 +49,8 @@ const WEIGHTS = [[100, '100 極細'], [200, '200'], [300, '300 細'], [400, '400
 // Mirrors Light in tdp_doc.h.
 const LIGHT_DEFAULTS = { angle: 225, height: 45, intensity: 100, ambient: 35, env: 'soft', motion: 'none', range: 180, period: 4, start: 0, duration: 60 };
 // Fill / stroke surface defaults (Layer in tdp_doc.h).
-const SURFACE_DEFAULTS = { material: 'none', metallic: 0, roughness: 40, brushed: false, bevel: 'none', bevelWidth: 4, bevelHeight: 4, bumpDepth: 4 };
+const SURFACE_DEFAULTS = { material: 'none', metallic: 0, roughness: 40, brushed: false, bevel: 'none', bevelWidth: 4, bevelHeight: 4, bumpDepth: 4,
+  bevelSoften: 0, bevelDown: false, hiColor: '#FFFFFFFF', hiAmount: 0, shColor: '#FF000000', shAmount: 0, ownLight: false, lightAngle: 225, lightHeight: 45 };
 // Mirrors Texture in tdp_doc.h.
 const makeTexture = (over) => Object.assign({ path: '', area: 'text', fit: 'cover', scale: 100, offsetX: 0, offsetY: 0, rotation: 0,
   blend: 'normal', opacity: 100, speed: 100, startTime: 0, loop: true }, over);
@@ -107,6 +108,7 @@ function surfaceEditor(o, l) {
   if (l.bevel !== 'none') {
     parts.push(num('ベベルの幅', () => l.bevelWidth, (v) => { l.bevelWidth = v; }, { unit: 'px', min: 0, step: 0.5 }));
     parts.push(num('ベベルの高さ', () => l.bevelHeight, (v) => { l.bevelHeight = v; }, { unit: 'px', min: 0, step: 0.5 }));
+    parts.push(bevelDetails(l));
   }
   // Bump: the brightness of a texture is the height of the surface (lit by the light below).
   l.bump = l.bump || makeTexture({});
@@ -116,6 +118,30 @@ function surfaceEditor(o, l) {
   parts.push(el('div', { class: 'hint', text: '材質「あり」は、この層の色を素の色にして、光と映り込み（「ライトと映り込み」）で描きます。プリセットは色も書き換えます。ベベルはこの層の形の縁に付きます。凹凸は画像の明るさを高さにして、光で陰影を付けます（明るい所が盛り上がる）。' }));
   return el('div', { style: 'display:flex;flex-direction:column;gap:5px' }, ...parts);
 }
+
+// Photoshop-style details of a layer's bevel, folded away until needed (opened when something is set).
+function bevelDetails(l) {
+  const used = l.bevelSoften > 0 || l.bevelDown || l.hiAmount > 0 || l.shAmount > 0 || l.ownLight;
+  const d = el('details', { class: 'bevelDetails' }, el('summary', { text: 'ベベルの詳細設定' }));
+  if (used || bevelDetailsOpen) d.open = true;
+  d.addEventListener('toggle', () => { bevelDetailsOpen = d.open; });
+  const own = check('光の向きを個別に決める', () => l.ownLight, (v) => { l.ownLight = v; });
+  own.querySelector('input').addEventListener('change', () => buildProps()); // the angle rows appear / disappear
+  d.append(
+    seg('方向', [[false, '上（盛り上がる）'], [true, '下（へこむ）']], () => !!l.bevelDown, (v) => { l.bevelDown = v; }),
+    num('ソフトさ', () => l.bevelSoften || 0, (v) => { l.bevelSoften = v; }, { unit: '（0〜8。大きいほどなめらか）', min: 0, max: 8 }),
+    colorRow('ハイライトの色', () => l.hiColor, (c) => { l.hiColor = c; }),
+    num('ハイライトの強さ', () => l.hiAmount || 0, (v) => { l.hiAmount = v; }, { unit: '%（0 = なし。光に向く面を明るく）', min: 0, max: 100 }),
+    colorRow('シャドウの色', () => l.shColor, (c) => { l.shColor = c; }),
+    num('シャドウの強さ', () => l.shAmount || 0, (v) => { l.shAmount = v; }, { unit: '%（0 = なし。光に背く面を暗く）', min: 0, max: 100 }),
+    own,
+    ...(l.ownLight ? [
+      num('光の来る方向', () => l.lightAngle ?? 225, (v) => { l.lightAngle = v; }, { unit: '°（0 = 右, 90 = 下, 225 = 左上）' }),
+      num('光の高さ', () => l.lightHeight ?? 45, (v) => { l.lightHeight = v; }, { unit: '°', min: 0, max: 90 })] : []),
+    el('div', { class: 'hint', text: 'ハイライトはスクリーン、シャドウは乗算で重ねます。層の「ベベル」（と凹凸）にだけ効き、3D 層のベベルには効きません。「光の向きを個別に」をオンにすると、この層のベベルだけ別の方向から照らします。' }));
+  return d;
+}
+let bevelDetailsOpen = false;
 
 function lightSection(o) {
   const L = o.light = Object.assign({}, LIGHT_DEFAULTS, o.light);

@@ -118,6 +118,19 @@ struct Layer {
 	float roughness = 40;                // %
 	bool brushed = false;                // hairline streaks (fill / stroke)
 
+	// Bevel details (fill / stroke surface pass). Soften = extra smoothing passes of the bevel height (0..8);
+	// down = the relief sinks in instead of standing out. Highlight / shadow tint the faces that turn towards /
+	// away from the light (screen / multiply, like Photoshop); amount 0 = off. ownLight = this layer's bevel is
+	// lit from lightAngle / lightHeight instead of the text's light.
+	float bevelSoften = 0;
+	bool bevelDown = false;
+	uint32_t hiColor = 0xFFFFFFFF;
+	float hiAmount = 0;                  // %
+	uint32_t shColor = 0xFF000000;
+	float shAmount = 0;                  // %
+	bool ownLight = false;
+	float lightAngle = 225, lightHeight = 45;
+
 	// Bump (fill / stroke): the brightness of the texture is a height map for the surface shading.
 	Texture bump;                        // empty path = none
 	float bumpDepth = 4;                 // px of height for white (negative = sunk in)

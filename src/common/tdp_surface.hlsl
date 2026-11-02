@@ -14,6 +14,8 @@ cbuffer Surface : register(b0)
 	float4 jump;    // jump flood step px; blur direction (yz)
 	float4 rot[3];  // turn of the 3D layer behind this one (rows), identity in 2D
 	float4 bump;    // bump height px for white, bump map present (1)
+	float4 hi;      // highlight tint: linear colour, amount (0 = off)
+	float4 sh;      // shadow tint: linear colour, amount (0 = off)
 };
 
 float3 Turn(float3 n) { return normalize(float3(dot(rot[0].xyz, n), dot(rot[1].xyz, n), dot(rot[2].xyz, n))); }
@@ -137,5 +139,12 @@ float4 PSShade(float4 pos : SV_Position) : SV_Target
 		const float3 flat = Shade(grey, N0, V, L, light.w, camera.w, 0, 0.4, view.w);
 		col = base * lit / max(flat, 0.05);
 	}
+	// Highlight / shadow tint (Photoshop style): faces that turn towards the light are screened with the
+	// highlight colour, faces that turn away are multiplied with the shadow colour.
+	const float facing = dot(N, L) - dot(N0, L);
+	if (facing > 0 && hi.w > 0)
+		col = lerp(col, 1 - (1 - col) * (1 - hi.rgb), saturate(facing * 2.0) * hi.w);
+	if (facing < 0 && sh.w > 0)
+		col = lerp(col, col * sh.rgb, saturate(-facing * 2.0) * sh.w);
 	return float4(ToSrgb(col) * c.a, c.a);
 }

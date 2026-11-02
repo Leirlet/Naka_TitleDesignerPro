@@ -1913,6 +1913,8 @@ private:
 		float jump[4];   // jump flood step px
 		float rot[3][4]; // turn of the 3D layer behind (front face normal), rows
 		float bump[4];   // bump height px for white, bump map present
+		float hi[4];     // highlight tint: linear colour, amount
+		float sh[4];     // shadow tint: linear colour, amount
 	};
 
 	void ResetSeeds()
@@ -1966,7 +1968,17 @@ private:
 		const bool bevel = l.bevel != BevelShape::None && l.bevelWidth > 0 && l.bevelHeight > 0;
 		const float widthPx = std::max(l.bevelWidth * ds, 0.5f);
 		const float D = W * 1.39f;
-		const float4v ld = LightVector(curLight_);
+		Light lightHere = curLight_; // this layer may light its bevel from its own direction
+		if (l.ownLight) { lightHere.angle = l.lightAngle; lightHere.height = l.lightHeight; }
+		const float4v ld = LightVector(lightHere);
+		// Highlight / shadow tint: linear colour, amount (colour alpha x strength).
+		auto tint = [](uint32_t argb, float amount, float out[4]) {
+			const float a = ((argb >> 24) & 0xFF) / 255.0f;
+			out[0] = std::pow(((argb >> 16) & 0xFF) / 255.0f, 2.2f);
+			out[1] = std::pow(((argb >> 8) & 0xFF) / 255.0f, 2.2f);
+			out[2] = std::pow((argb & 0xFF) / 255.0f, 2.2f);
+			out[3] = a * std::clamp(amount / 100.0f, 0.0f, 1.0f);
+		};
 
 		// Bump: the texture drawn into kC as a height map (its brightness) in output pixels.
 		bool bump = false;
@@ -1977,7 +1989,7 @@ private:
 		}
 		SurfaceConstants c = {
 			{ W, H, D, curLight_.env == EnvStyle::Studio ? 1.0f : 0.0f },
-			{ widthPx, l.bevelHeight * ds, bevel ? (float)(int)l.bevel : 0.0f, 0.5f * std::clamp(l.opacity / 100.0f, 0.02f, 1.0f) },
+			{ widthPx, (l.bevelDown ? -1.0f : 1.0f) * l.bevelHeight * ds, bevel ? (float)(int)l.bevel : 0.0f, 0.5f * std::clamp(l.opacity / 100.0f, 0.02f, 1.0f) },
 			{ ld.v[0], ld.v[1], ld.v[2], ld.v[3] },
 			{ W * 0.5f, H * 0.5f, -D, std::max(curLight_.ambient, 0.0f) / 100.0f },
 			{ std::clamp(l.metallic / 100.0f, 0.0f, 1.0f), std::clamp(l.roughness / 100.0f, 0.0f, 1.0f), l.brushed ? 1.0f : 0.0f,
@@ -1985,7 +1997,10 @@ private:
 			{ 1, 0, 0, 0 },
 			{ { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 } },
 			{ l.bumpDepth * ds, bump ? 1.0f : 0.0f, 0, 0 },
+			{}, {},
 		};
+		tint(l.hiColor, l.hiAmount, c.hi);
+		tint(l.shColor, l.shAmount, c.sh);
 		// In front of a 3D layer this layer becomes its front face: light it turned like the object.
 		const int extrude = Extrude3DIndex(obj);
 		if (extrude >= 0 && &l < &obj.stack[extrude]) {
@@ -2031,9 +2046,11 @@ private:
 			// Bevel height into the other target: the shade pass reads it as t1.
 			FullPass(psHeight_.Get(), seedRtv_[1 - seed].Get(), slotSrv_[kTmp].Get(), seedSrv_[seed].Get());
 			seed = 1 - seed;
-			for (int dir = 0; dir < 2; ++dir) {
-				c.jump[1] = dir == 0 ? 1.0f : 0.0f;
-				c.jump[2] = dir == 0 ? 0.0f : 1.0f;
+			// One smoothing pass always; "soften" adds more.
+			const int passes = 1 + (int)std::lround(std::clamp(l.bevelSoften, 0.0f, 8.0f));
+			for (int dir = 0; dir < 2 * passes; ++dir) {
+				c.jump[1] = dir % 2 == 0 ? 1.0f : 0.0f;
+				c.jump[2] = dir % 2 == 0 ? 0.0f : 1.0f;
 				context_->UpdateSubresource(cbSurf_.Get(), 0, nullptr, &c, 0, 0);
 				FullPass(psBlur_.Get(), seedRtv_[1 - seed].Get(), nullptr, seedSrv_[seed].Get());
 				seed = 1 - seed;
@@ -2326,6 +2343,7 @@ private:
 				f.bump = Texture();
 				f.tex = Texture();
 				f.soften = 0;
+				f.bevelSoften = 0; f.bevelDown = false; f.hiAmount = f.shAmount = 0; f.ownLight = false;
 			}
 			k.light = Light();
 			x.sideColor = defaults.sideColor; x.sideColor2 = defaults.sideColor2;
