@@ -344,9 +344,15 @@ function init(m) {
   state.sel = state.doc.objects.length ? 0 : -1;
   if (obj()) state.layerSel = obj().stack[0] && obj().stack[0].id;
   if (m.bgUrl) {
-    const img = new Image();
-    img.onload = () => { state.bgImage = img; draw(); };
-    img.src = m.bgUrl + '?t=' + Date.now();
+    // The frame may still be rendering when the designer starts: retry until the file exists.
+    let tries = 0;
+    const loadBg = () => {
+      const img = new Image();
+      img.onload = () => { state.bgImage = img; draw(); };
+      img.onerror = () => { if (++tries < 100) setTimeout(loadBg, 300); };
+      img.src = m.bgUrl + '?t=' + Date.now();
+    };
+    loadBg();
   } else {
     $('#chkBg').checked = false;
     state.showBg = false;
